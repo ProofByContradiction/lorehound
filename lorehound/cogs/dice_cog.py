@@ -137,8 +137,6 @@ class DiceCog(commands.Cog):
         )
         embed.add_field(name="Rolls", value=rolls_str, inline=False)
         embed.add_field(name="Extra hits (6s)", value=str(result.extra_hits))
-        if result.ones:
-            embed.add_field(name="1s rolled", value=str(result.ones))
         await interaction.response.send_message(embed=embed)
 
 

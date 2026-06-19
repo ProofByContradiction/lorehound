@@ -29,8 +29,8 @@ any rules content.
 
 > **Twilight 2000 dice — please double-check me.** I encoded A=d12, B=d10,
 > C=d8, D=d6; each die showing **6+** is a success; ammo-die **6s** are extra
-> hits. The ammo *depletion* rule isn't wired in yet because I wasn't sure how
-> your table tracks spent rounds — tell me and I'll add it. See
+> hits. Ammo/round *depletion is intentionally not tracked* — players track
+> their own spent rounds; the bot only rolls and reads dice. See
 > `lorehound/twilight.py`.
 
 ---
@@ -86,6 +86,25 @@ python bot.py
 8. Start the bot and run `/rules_sync`. Then try `/rule <topic>`.
 
 ---
+
+## Security
+
+Secrets never live in code — only in `.env` (gitignored) locally, or in your
+host's env-var settings in production.
+
+- **`.env` holds all tokens.** It is gitignored; only `.env.example` (with no
+  real values) is committed.
+- **Pre-commit guard.** A hook in `.githooks/` refuses to commit any secret file
+  or embedded token/private key — defense-in-depth on top of `.gitignore`.
+  Enable it per clone (already set here) with:
+  `git config core.hooksPath .githooks`
+- **Lock down permissions** on anything holding a real secret:
+  `chmod 600 .env service_account.json`
+- **Least privilege.** The Google service account uses read-only Drive scope and
+  the Discord bot requests no privileged intents.
+- **If a secret ever leaks, rotate it** — that's the only real fix. Reset the
+  Discord token in the Developer Portal, and delete/recreate the service-account
+  key in Google Cloud. (Deleting the file alone doesn't invalidate a leaked key.)
 
 ## Hosting (free tiers)
 

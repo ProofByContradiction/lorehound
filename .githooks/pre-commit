@@ -1,0 +1,38 @@
+#!/bin/sh
+# Lorehound pre-commit guard — refuse to commit secrets (defense-in-depth on
+# top of .gitignore). Activated via: git config core.hooksPath .githooks
+# Bypass a genuine false positive with: git commit --no-verify
+set -eu
+
+names=$(git diff --cached --name-only --diff-filter=ACM) || exit 0
+[ -z "$names" ] && exit 0
+
+offenders=""
+OLDIFS=$IFS
+IFS='
+'
+for f in $names; do
+    case "$f" in
+        *.example|*.sample) continue ;;                 # templates are safe
+        .env|*/.env|*.env)
+            offenders="$offenders|$f (env / secrets file)"; continue ;;
+        *service_account*.json|*credentials*.json|*.pem|*.key|*.p12)
+            offenders="$offenders|$f (credential file)"; continue ;;
+    esac
+    [ -f "$f" ] || continue
+    # Scan the staged content for embedded private keys or real token values.
+    if git show ":$f" 2>/dev/null | grep -Eq -- \
+        '-----BEGIN [A-Z ]*PRIVATE KEY-----|"private_key"[[:space:]]*:|(DISCORD_TOKEN|GOOGLE_CREDENTIALS_JSON)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9._-]{16,}'; then
+        offenders="$offenders|$f (embedded secret)"
+    fi
+done
+IFS=$OLDIFS
+
+if [ -n "$offenders" ]; then
+    echo "🚫 Lorehound pre-commit blocked likely secrets:"
+    printf '%s\n' "$offenders" | tr '|' '\n' | sed '/^$/d;s/^/   - /'
+    echo ""
+    echo "Nothing was committed. False positive? Re-run with: git commit --no-verify"
+    exit 1
+fi
+exit 0
