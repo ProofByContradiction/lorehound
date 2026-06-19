@@ -1,0 +1,26 @@
+# Secrets — never commit these
+.env
+*.env
+service_account*.json
+credentials*.json
+google-credentials*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local rules cache / downloads
+cache/
+data/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

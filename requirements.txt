@@ -1,0 +1,16 @@
+# Discord
+discord.py>=2.4,<3
+
+# Google Drive (service-account auth + file download/export)
+google-api-python-client>=2.100
+google-auth>=2.20
+google-auth-httplib2>=0.2
+
+# PDF text extraction
+pypdf>=4.0
+
+# Local .env loading (no-op in production if absent)
+python-dotenv>=1.0
+
+# NOTE: search uses a tiny built-in BM25 (lorehound/search_index.py), so there
+# is intentionally no numpy/scikit dependency to keep hosting light.
