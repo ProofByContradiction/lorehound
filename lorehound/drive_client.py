@@ -7,8 +7,11 @@ key either as a file path (GOOGLE_CREDENTIALS_FILE) or as the raw JSON
 
 PDF text is extracted with PyMuPDF (pymupdf4llm) to Markdown — it handles
 multi-column reading order and tables far better than pypdf, and the Markdown
-headings let us chunk by section. Extracted text is cached to disk (keyed by
-Drive file id + last-modified time + extractor version) so restarts/syncs only
+headings let us chunk by section. We run pymupdf4llm in its *ML-free* mode
+(``use_layout(False)``): the pure-Python font-histogram heading detection and
+``column_boxes`` reading order, without the optional pymupdf-layout ONNX model
+(~100MB of deps, ~40s/book). Extracted text is cached to disk (keyed by Drive
+file id + last-modified time + extractor version) so restarts/syncs only
 re-download files that actually changed.
 """
 
@@ -28,8 +31,18 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 GOOGLE_DOC = "application/vnd.google-apps.document"
 GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
-# Bump to invalidate all caches when the extraction method/output changes.
-EXTRACT_VERSION = "pymupdf-md-v2-tables"
+# Markdown extraction lineage. Bump when the to_markdown path itself changes
+# (e.g. switching pymupdf-layout off for the ML-free font-histogram headings) so
+# stale Markdown is recomputed even though the source file is unchanged.
+MD_VERSION = "pymupdf-md-nolayout-v1"
+# Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
+# markdown-only change reuses the (unchanged) tables instead of re-detecting them.
+TABLE_VERSION = "find-tables-lines-v1"
+# Caches written before the split-versioning scheme; their tables already match
+# TABLE_VERSION's logic, so we can reuse them without re-running detection.
+_LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
+# Combined stamp for the "everything is current" fast path.
+EXTRACT_VERSION = f"{MD_VERSION}+{TABLE_VERSION}"
 
 
 @dataclass
@@ -163,13 +176,22 @@ class DriveClient:
     def _extract_pdf(self, data: bytes) -> tuple[str, list[dict]]:
         """PDF bytes -> (Markdown with one ``[[page N]]`` marker per page,
         structured tables recovered via pdf_tables)."""
-        import fitz  # PyMuPDF
-
-        # Tables FIRST (clean subprocess): importing pymupdf4llm in-process
-        # corrupts PyMuPDF's find_tables, so table detection must run isolated.
+        # Tables run in an isolated subprocess (find_tables only), so order no
+        # longer matters; keep them first for consistency with the old path.
         tables = self._pdf_tables(data)
+        text = self._pdf_markdown(data)
+        return text, tables
 
+    def _pdf_markdown(self, data: bytes) -> str:
+        """PDF bytes -> Markdown with one ``[[page N]]`` marker per page, using
+        pymupdf4llm's ML-free (font-histogram + column_boxes) path."""
+        import fitz  # PyMuPDF
         import pymupdf4llm
+
+        # Detach the optional pymupdf-layout ONNX model: use the pure-Python
+        # font-size heading detection and multi-column reading order. Idempotent,
+        # and a no-op when pymupdf-layout isn't installed.
+        pymupdf4llm.use_layout(False)
 
         doc = fitz.open(stream=data, filetype="pdf")
         try:
@@ -182,7 +204,7 @@ class DriveClient:
         for i, p in enumerate(pages, start=1):
             md = p.get("text", "") if isinstance(p, dict) else str(p)
             out.append(f"[[page {i}]]\n{md}")
-        return "\n\n".join(out), tables
+        return "\n\n".join(out)
 
     def _pdf_tables(self, data: bytes) -> list[dict]:
         """Recover structured tables (via an isolated subprocess), tagging each
@@ -279,6 +301,13 @@ class DriveClient:
 
     def _read_cache(self, file_id: str, modified: str) -> tuple[str, list[dict]] | None:
         """Return cached (text, tables) if present, current, and same version."""
+        data = self._load_cache(file_id, modified)
+        if data is None or data.get("v") != EXTRACT_VERSION:
+            return None
+        return data.get("text", ""), data.get("tables", [])
+
+    def _load_cache(self, file_id: str, modified: str) -> dict | None:
+        """Parsed cache JSON for an *unchanged* file (mtime match), else None."""
         path = self._cache_file(file_id)
         if not path or not path.exists():
             return None
@@ -286,26 +315,27 @@ class DriveClient:
             data = json.loads(path.read_text())
         except Exception:  # noqa: BLE001 - corrupt cache, just re-fetch
             return None
-        if data.get("v") != EXTRACT_VERSION or data.get("modifiedTime") != modified:
-            return None
-        return data.get("text", ""), data.get("tables", [])
+        return data if data.get("modifiedTime") == modified else None
 
     def _read_cached_text(self, file_id: str, modified: str) -> str | None:
-        """Cached Markdown for an *unchanged* file regardless of extractor version.
-
-        Lets a version bump that only adds tables reuse the (unchanged) Markdown
-        instead of re-running the slow to_markdown."""
-        path = self._cache_file(file_id)
-        if not path or not path.exists():
+        """Cached Markdown for an unchanged file, only if produced by the current
+        markdown extractor (MD_VERSION). A markdown-method change recomputes it;
+        a table-only change reuses it."""
+        data = self._load_cache(file_id, modified)
+        if data is None or data.get("mdv") != MD_VERSION:
             return None
-        try:
-            data = json.loads(path.read_text())
-        except Exception:  # noqa: BLE001
-            return None
-        if data.get("modifiedTime") != modified:
-            return None  # file changed → re-extract from scratch
         text = data.get("text", "")
         return text if text.strip() else None
+
+    def _read_cached_tables(self, file_id: str, modified: str) -> list[dict] | None:
+        """Cached tables for an unchanged file, if produced by the current table
+        extractor (TABLE_VERSION) or a legacy cache whose tables still match."""
+        data = self._load_cache(file_id, modified)
+        if data is None:
+            return None
+        if data.get("tbv") == TABLE_VERSION or data.get("v") in _LEGACY_TABLE_VERSIONS:
+            return data.get("tables", [])
+        return None
 
     def _write_cache(
         self, file_id: str, modified: str, text: str, tables: list[dict]
@@ -318,6 +348,8 @@ class DriveClient:
                 json.dumps(
                     {
                         "v": EXTRACT_VERSION,
+                        "mdv": MD_VERSION,
+                        "tbv": TABLE_VERSION,
                         "modifiedTime": modified,
                         "text": text,
                         "tables": tables,
@@ -340,14 +372,25 @@ class DriveClient:
             if cached is not None:
                 text, tables = cached
             else:
-                reused = self._read_cached_text(f["id"], modified)
-                is_pdf = f["mimeType"] == "application/pdf" or f["name"].lower().endswith(
-                    ".pdf"
-                )
-                if reused is not None and is_pdf:
-                    # Markdown unchanged — only the tables are new; skip to_markdown.
-                    tables = self._pdf_tables(self._download_bytes(f["id"]))
-                    text = reused
+                is_pdf = f["mimeType"] == "application/pdf" or f[
+                    "name"
+                ].lower().endswith(".pdf")
+                if is_pdf:
+                    # Reuse markdown and tables independently: a markdown-method
+                    # change recomputes only the Markdown and keeps the tables
+                    # (and vice-versa), downloading the bytes only if either is
+                    # actually stale.
+                    reused_md = self._read_cached_text(f["id"], modified)
+                    reused_tb = self._read_cached_tables(f["id"], modified)
+                    data = (
+                        self._download_bytes(f["id"])
+                        if reused_md is None or reused_tb is None
+                        else None
+                    )
+                    text = reused_md if reused_md is not None else self._pdf_markdown(data)
+                    tables = (
+                        reused_tb if reused_tb is not None else self._pdf_tables(data)
+                    )
                 else:
                     text, tables = self._extract_text(f)
                 self._write_cache(f["id"], modified, text, tables)
