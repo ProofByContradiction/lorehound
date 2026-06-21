@@ -37,7 +37,8 @@ def capabilities_embed(bot: commands.Bot) -> discord.Embed:
             "Search the loaded game books, then pick a result to read in full:\n"
             "`/rule source:<game> query:<topic>` — how to play: stats, abilities, specialties\n"
             "`/item source:<game> query:<topic>` — gear, weapons, equipment\n"
-            "`/vehicle source:<game> query:<topic>` — vehicles, ships & their parts\n"
+            "`/transport source:<game> query:<topic>` — vehicles, ships, craft & parts\n"
+            "`/table source:<game> name:<table>` — print a rules table (by chapter)\n"
             "`/sources` — list available games & books  ·  `/rules_sync` — re-index the library"
         ),
         inline=False,

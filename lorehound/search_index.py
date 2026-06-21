@@ -27,7 +27,7 @@ class Chunk:
     section: str         # heading breadcrumb, e.g. "Combat & Damage › Explosions › Sniper"
     locator: str         # "p. 69"
     text: str
-    rows: list[str] = field(default_factory=list)  # raw table rows (tables only)
+    rows: list[list[str]] = field(default_factory=list)  # cell grid (tables only)
     tokens: list[str] = field(default_factory=list)
     heading_terms: set[str] = field(default_factory=set)
 

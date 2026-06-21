@@ -1,56 +1,13 @@
-"""Reconstruct and render tables pulled from RPG PDFs.
+"""Render structured tables (cell grids) as aligned monospace blocks for Discord.
 
-PyMuPDF renders many RPG tables as *images*; pymupdf4llm emits their OCR'd text
-between "Start/End of picture text" markers with ``<br>`` between rows. Those
-would otherwise be dropped, so we recover them here and render them as aligned
-monospace blocks that read well in Discord.
-
-Reconstruction is best-effort: two-column tables (most rules lookups — hit
-location, fire modifiers, encounter tables) rebuild cleanly; wider OCR'd grids
-can't always be split confidently, so ``render_table`` flags those as ``messy``
-and the caller adds a "verify against the book" note.
+Tables are recovered upstream as real cell grids by ``pdf_tables`` (PyMuPDF
+find_tables + word-bucketing), so there's no reconstruction here — just
+width-aware, bordered rendering that stays legible in Discord's container.
 """
 
 from __future__ import annotations
 
-import re
 import textwrap
-
-_BR = re.compile(r"<br\s*/?>", re.I)
-
-# A "value-like" cell: a die result, modifier, range, or dash — the codey column
-# in a two-column rules table. Handles ASCII '-' and en/em dashes.
-_VALUE = re.compile(r"^(?:[+\-–—]|[Dd]\d+|\d+\+|[+\-–—/\d]*\d[+\-–—/\d]*)$")
-
-
-def parse_picture_rows(body: str) -> list[str]:
-    """Split an OCR'd picture-text block body into cleaned row strings."""
-    rows = []
-    for part in _BR.split(body):
-        cell = " ".join(part.split())  # collapse whitespace/newlines
-        if cell:
-            rows.append(cell)
-    return rows
-
-
-def _is_value(tok: str) -> bool:
-    return bool(_VALUE.match(tok))
-
-
-def _split_leading(row: str) -> tuple[str, str] | None:
-    """('1', 'Legs') if the row starts with a value-like key, else None."""
-    toks = row.split()
-    if toks and _is_value(toks[0]):
-        return toks[0], " ".join(toks[1:])
-    return None
-
-
-def _split_trailing(row: str) -> tuple[str, str] | None:
-    """('Quick shot', '-1') if the row ends with a value-like cell, else None."""
-    toks = row.split()
-    if toks and _is_value(toks[-1]):
-        return " ".join(toks[:-1]), toks[-1]
-    return None
 
 
 def _wrap_cell(text: str, width: int) -> list[str]:
@@ -69,7 +26,7 @@ def _box(
     row_seps: bool = False,
 ) -> str:
     """Draw cells as a bordered monospace table, wrapping cell text to ``caps``
-    (per-column max widths) so wide tables stay legible in Discord's container.
+    (per-column max widths) so wide tables stay legible.
 
     ``has_header`` draws a heavier rule under the first row. ``row_seps`` draws a
     light rule between every body row — used when cells wrap, so multi-line rows
@@ -125,98 +82,27 @@ def _wraps(cells: list[list[str]], caps: list[int]) -> bool:
     )
 
 
-def _uniform_ncols(data: list[str]) -> int | None:
-    """Return N if the data rows share a dominant token count N>=3 (a uniform
-    grid), else None."""
-    from collections import Counter
+def render_table(rows: list[list[str]]) -> tuple[str, bool]:
+    """Render a cell grid (first row = header) as a bordered monospace table.
 
-    counts = Counter(len(r.split()) for r in data)
-    n, freq = counts.most_common(1)[0]
-    if n >= 3 and freq >= max(2, int(len(data) * 0.7)):
-        return n
-    return None
-
-
-def render_table(rows: list[str]) -> tuple[str, bool]:
-    """Render row strings as a bordered monospace table.
-
-    Returns ``(code_block, messy)``. ``messy`` is True when columns couldn't be
-    confidently reconstructed; the caller adds a verify-against-book note.
+    Returns ``(code_block, wide)`` — ``wide`` flags many-column tables that may
+    still scroll horizontally on narrow screens.
     """
-    rows = [r for r in rows if r]
-    if not rows:
-        return "```\n(empty table)\n```", True
-    header, data = rows[0], rows[1:]
-
-    if not data:
-        return "```\n" + _box([[header]], ["l"], [46]) + "\n```", True
-
-    # --- Tier 1: two-column key/value (most rules lookups) ------------------
-    lead = sum(1 for r in data if _split_leading(r))
-    trail = sum(1 for r in data if _split_trailing(r))
-    half = len(data) / 2
-    orient = "lead" if (lead >= trail and lead >= half) else (
-        "trail" if trail >= half else None
-    )
-
-    if orient:
-        pairs: list[tuple[str, str]] = []
-        for r in data:
-            sp = _split_leading(r) if orient == "lead" else _split_trailing(r)
-            if sp is None:  # OCR wrap fragment: fold into the previous row
-                if pairs:
-                    a, b = pairs[-1]
-                    pairs[-1] = (
-                        (a, f"{b} {r}".strip())
-                        if orient == "lead"
-                        else (f"{a} {r}".strip(), b)
-                    )
-                else:
-                    pairs.append((r, "") if orient == "lead" else ("", r))
-                continue
-            pairs.append(sp)
-
-        hsp = _split_leading(header) if orient == "lead" else _split_trailing(header)
-        if hsp is None:
-            toks = header.split()
-            if len(toks) > 1:
-                hsp = (
-                    (toks[0], " ".join(toks[1:]))
-                    if orient == "lead"
-                    else (" ".join(toks[:-1]), toks[-1])
-                )
-            else:
-                hsp = (header, "")
-
-        cells = [[hsp[0], hsp[1]]] + [[a, b] for a, b in pairs]
-        aligns, caps = (
-            (["c", "l"], [10, 30]) if orient == "lead" else (["l", "c"], [30, 10])
-        )
-        return (
-            "```\n" + _box(cells, aligns, caps, row_seps=_wraps(cells, caps)) + "\n```",
-            False,
-        )
-
-    # --- Tier 2: uniform N-column grid (skill-level / attribute tables) -----
-    n = _uniform_ncols(data)
-    if n:
-        def split_n(s: str) -> list[str]:
-            toks = s.split()
-            if len(toks) <= n:
-                return toks + [""] * (n - len(toks))
-            return toks[: n - 1] + [" ".join(toks[n - 1:])]  # extras → last cell
-
-        body = [split_n(r) for r in data]
-        caps = [16] * n
-        aligns = ["c"] + ["l"] * (n - 1)  # codes/numbers centre; text left
-        head_toks = header.split()
-        if len(head_toks) == n:
-            cells = [head_toks] + body
-            tbl = _box(cells, aligns, caps, row_seps=_wraps(cells, caps))
-            return "```\n" + tbl + "\n```", False
-        # Header doesn't map cleanly to N columns — show it as a caption line.
-        tbl = _box(body, aligns, caps, has_header=False, row_seps=_wraps(body, caps))
-        return "```\n" + header + "\n" + tbl + "\n```", False
-
-    # --- Tier 3: complex grid — columns can't be recovered from OCR text ----
-    return "```\n" + _box([[r] for r in rows], ["l"], [46]) + "\n```", True
+    grid = [
+        [(c or "").strip() for c in r]
+        for r in rows
+        if any((c or "").strip() for c in r)
+    ]
+    if not grid:
+        return "```\n(empty table)\n```", False
+    ncols = max(len(r) for r in grid)
+    grid = [r + [""] * (ncols - len(r)) for r in grid]
+    cap = max(6, min(22, 110 // ncols))  # tighter caps as columns grow
+    caps = [cap] * ncols
+    # Centre short "code" columns (die rolls, modifiers); left-align wordy ones.
+    aligns = []
+    for i in range(ncols):
+        col = [grid[r][i] for r in range(len(grid)) if grid[r][i]]
+        aligns.append("c" if col and all(len(c) <= 4 for c in col) else "l")
+    block = _box(grid, aligns, caps, row_seps=_wraps(grid, caps))
+    return "```\n" + block + "\n```", ncols >= 6

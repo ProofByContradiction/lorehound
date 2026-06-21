@@ -108,65 +108,60 @@ class TestHeadingBoost(unittest.TestCase):
 
 
 class TestTables(unittest.TestCase):
-    def test_two_column_table_renders_clean(self):
+    def test_render_cell_grid(self):
         from lorehound.tables import render_table
 
-        rows = ["D6 HIT LOCATION", "1 Legs", "2–4 Torso", "5 Arm", "6 Head"]
-        out, messy = render_table(rows)
-        self.assertFalse(messy)
+        rows = [["D6", "HIT LOCATION"], ["1", "Legs"], ["2–4", "Torso"], ["6", "Head"]]
+        out, wide = render_table(rows)
+        self.assertFalse(wide)  # only 2 columns
         self.assertTrue(out.startswith("```"))
-        for word in ("Legs", "Torso", "Head"):
+        self.assertIn("│", out)  # bordered
+        for word in ("Legs", "Torso", "Head", "HIT LOCATION"):
             self.assertIn(word, out)
 
-    def test_ocr_wrap_folds_into_previous_row(self):
+    def test_render_flags_wide_table(self):
         from lorehound.tables import render_table
 
-        # Short enough not to line-wrap, so the folded text stays contiguous.
-        rows = ["FACTOR MODIFIER", "Called shot +3", "at long range"]
-        out, messy = render_table(rows)
-        self.assertFalse(messy)
-        self.assertIn("Called shot at long range", out)
+        rows = [["A", "B", "C", "D", "E", "F"], ["1", "2", "3", "4", "5", "6"]]
+        _out, wide = render_table(rows)
+        self.assertTrue(wide)  # >= 6 columns may scroll on mobile
 
-    def test_uniform_grid_reconstructs(self):
-        from lorehound.tables import render_table
-
-        rows = [
-            "SKILL LEVEL DIE TYPE DIE SIZE DESCRIPTION",
-            "A D12 12 Elite",
-            "B D10 10 Veteran",
-            "C D8 8 Experienced",
-            "D D6 6 Novice",
-        ]
-        out, messy = render_table(rows)
-        self.assertFalse(messy)  # uniform 4-token rows → real grid
-        for word in ("Elite", "Veteran", "Experienced", "DESCRIPTION"):
-            self.assertIn(word, out)
-
-    def test_messy_table_is_flagged(self):
-        from lorehound.tables import render_table
-
-        rows = ["NAME RANK SERIAL NOTE", "Bob Sergeant 12345 hero of many battles"]
-        out, messy = render_table(rows)
-        self.assertTrue(messy)
-
-    def test_extract_table_chunk_from_doc(self):
+    def test_tables_for_doc_routes_by_category(self):
         from lorehound.rules import _tables_for_doc
 
-        text = (
-            "[[page 74]]\n"
-            "## **HIT LOCATION**\n"
-            "**----- Start of picture text -----**<br>\n"
-            "D6 HIT LOCATION<br>1 Legs<br>2–4 Torso<br>5 Arm<br>6 Head<br>"
-            "**----- End of picture text -----**<br>\n"
-        )
-        tables = _tables_for_doc("Twilight 2000 (4E)/Core.pdf", text)
-        self.assertEqual(len(tables), 1)
-        t = tables[0]
-        self.assertEqual(t.category, "tables")
-        self.assertEqual(t.section, "HIT LOCATION")
-        self.assertEqual(t.locator, "p. 74")
-        self.assertIn("Legs", t.text)
-        self.assertGreaterEqual(len(t.rows), 5)
+        tables = [
+            {
+                "page": 74, "chapter": "Combat & Damage", "section": "Hit Location",
+                "title": "HIT LOCATION", "category": "rules",
+                "rows": [["D6", "HIT LOCATION"], ["1", "Legs"], ["6", "Head"]],
+            },
+            {
+                "page": 103, "chapter": "Weapons, Vehicles & Gear",
+                "section": "US Weapons", "title": "US MILITARY WEAPONS",
+                "category": "items", "rows": [["WEAPON", "DAMAGE"], ["M16", "3"]],
+            },
+        ]
+        chunks = _tables_for_doc("Twilight 2000 (4E)/Core.pdf", tables)
+        self.assertEqual(len(chunks), 2)
+        hit = next(c for c in chunks if "HIT LOCATION" in c.section)
+        self.assertEqual(hit.category, "tables")  # rules table → /table
+        self.assertEqual(hit.section, "Combat & Damage › HIT LOCATION")
+        self.assertEqual(hit.locator, "p. 74")
+        self.assertEqual(hit.rows[1], ["1", "Legs"])  # cell grid preserved
+        weapons = next(c for c in chunks if "WEAPONS" in c.section)
+        self.assertEqual(weapons.category, "items")  # weapon table → /item
+
+    def test_table_name_falls_back_when_title_is_prose(self):
+        from lorehound.rules import _tables_for_doc
+
+        tables = [{
+            "page": 21, "chapter": "Player Characters", "section": "Stockpiles",
+            "title": "that in the travel rules, see", "category": "rules",
+            "rows": [["UNIT", "DURATION"], ["Round", "5-10 sec"]],
+        }]
+        chunks = _tables_for_doc("T/C.pdf", tables)
+        # The prose-y title is rejected; falls back to the TOC section.
+        self.assertEqual(chunks[0].section, "Player Characters › Stockpiles")
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ _NOT_READY = (
 _META = {
     "rules": ("📖", "Rules"),
     "items": ("🎒", "Items"),
-    "vehicles": ("🚙", "Vehicles"),
+    "transport": ("🚙", "Transport"),
     "tables": ("📊", "Tables"),
 }
 
@@ -84,9 +84,11 @@ async def _table_autocomplete(
     cur = current.lower()
     seen: set[str] = set()
     out: list[app_commands.Choice[str]] = []
-    for c in rules.index.chunks:
-        if c.category != "tables" or c.game != game:
-            continue
+    tables = sorted(
+        (c for c in rules.index.chunks if c.category == "tables" and c.game == game),
+        key=lambda c: c.section,  # groups by chapter (the breadcrumb's first part)
+    )
+    for c in tables:
         disp = c.section + (f" · {c.locator}" if c.locator else "")
         if cur and cur not in disp.lower():
             continue
@@ -109,12 +111,11 @@ def _detail_embed(hit: SearchHit, query: str) -> discord.Embed:
     where = f"{c.source}" + (f" · {c.locator}" if c.locator else "")
     title = f"{emoji} {(c.section or query)[:250]}"
 
-    if c.category == "tables" and c.rows:
-        rendered, messy = render_table(c.rows)
+    if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
+        rendered, wide = render_table(c.rows)
         note = (
-            " — auto-rebuilt from the book's image; may be misaligned, verify "
-            "against the book."
-            if messy
+            " — wide table; scroll sideways on mobile. Verify against the book."
+            if wide
             else " — verify against the book for rulings."
         )
         embed = discord.Embed(
@@ -318,7 +319,8 @@ class RulesCog(commands.Cog):
         await self._lookup(interaction, "items", source, query, book)
 
     @app_commands.command(
-        name="vehicle", description="Look up a VEHICLE or its parts (ships, cars, craft)."
+        name="transport",
+        description="Look up TRANSPORT: vehicles, ships, craft, mounts & their parts.",
     )
     @app_commands.describe(
         source="Which game to search",
@@ -326,14 +328,14 @@ class RulesCog(commands.Cog):
         book="Optional: narrow to a single book",
     )
     @app_commands.autocomplete(source=_game_autocomplete, book=_book_autocomplete)
-    async def vehicle(
+    async def transport(
         self,
         interaction: discord.Interaction,
         source: str,
         query: str,
         book: str | None = None,
     ) -> None:
-        await self._lookup(interaction, "vehicles", source, query, book)
+        await self._lookup(interaction, "transport", source, query, book)
 
     @app_commands.command(
         name="table",

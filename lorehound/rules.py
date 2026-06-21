@@ -13,7 +13,6 @@ import re
 
 from .drive_client import DriveClient
 from .search_index import Chunk, SearchHit, SearchIndex
-from .tables import parse_picture_rows
 
 _PAGE_MARKER = re.compile(r"\[\[page (\d+)\]\]")
 _MD_HEADER = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -24,19 +23,6 @@ _PICTURE = re.compile(r"==>.*omitted.*<==|----- (Start|End) of picture text ----
 # Free League PDF watermark footer leaks into the text (e.g. "0 75 Adam Delaura
 # (Order #51743052)"); drop any line carrying the order-watermark.
 _WATERMARK = re.compile(r"\(Order #\d+\)")
-
-# An OCR'd image-table block, plus the structural markers we scan so each table
-# can be labelled with the heading above it. PyMuPDF emits image tables between
-# these markers with <br> between rows; the main prose pass drops them, so we
-# recover them here (see _tables_for_doc + tables.py).
-_PIC_BLOCK = re.compile(
-    r"-----\s*Start of picture text\s*-----\**(?:<br>)?\s*(?P<body>.*?)\s*"
-    r"\**-----\s*End of picture text\s*-----",
-    re.S,
-)
-_SCAN_PAGE = re.compile(r"\[\[page (\d+)\]\]")
-_SCAN_MD = re.compile(r"(?m)^(#{1,6})[ \t]+([^\n]+?)[ \t]*$")
-_SCAN_T2K = re.compile(r"(?m)^(\d{2})[ \t]+([A-Z][A-Z0-9 &'/.\-]{2,})[ \t]*$")
 
 # A "definition entry": a bold lead-in term with a colon, optionally bulleted —
 # e.g. "- **SNIPER:** Gives a +1 modifier…" or "**Ballistic Vest**: …". RPG books
@@ -71,12 +57,12 @@ _ITEM = re.compile(
 
 
 def _category(book: str, chapter: str, section: str) -> str:
-    """Classify as 'rules', 'items', or 'vehicles' from the most specific heading."""
+    """Classify as 'rules', 'items', or 'transport' from the most specific heading."""
     for text in (section, chapter, book):
         if not text:
             continue
         if _VEHICLE.search(text):
-            return "vehicles"
+            return "transport"
         if _ITEM.search(text):
             return "items"
     return "rules"
@@ -100,7 +86,7 @@ _WEAPON_WORDS = re.compile(
 
 def _content_category(body: str) -> str | None:
     if _VEHICLE_TABLE.search(body):
-        return "vehicles"
+        return "transport"
     if _WEAPON_TABLE.search(body) or _WEAPON_WORDS.search(body):
         return "items"
     return None
@@ -217,7 +203,7 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
         if not sig:
             continue
         if key:
-            if section_cat.get(key) != "vehicles":  # vehicles wins ties
+            if section_cat.get(key) != "transport":  # transport wins ties
                 section_cat[key] = sig
         else:
             ch.category = sig
@@ -227,7 +213,7 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
 
     # Keep the book's alphabetical index and leftover page-footer fragments out
     # of rule lookups: a single-letter section leaf, or a long number-dense chunk,
-    # is reference clutter, not a rule. Retag so /rule|/item|/vehicle skip it.
+    # is reference clutter, not a rule. Retag so /rule|/item|/transport skip it.
     for ch in chunks:
         if ch.category != "rules":
             continue
@@ -241,55 +227,60 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
     return chunks
 
 
-def _tables_for_doc(path: str, text: str) -> list[Chunk]:
-    """Recover OCR'd image-tables as their own searchable, renderable chunks.
+def _table_name(title: str, section: str, rows: list[list[str]]) -> str:
+    """A clean display name for a table: the detected heading, else the TOC
+    section, else the header row's first cell."""
+    t = (title or "").strip()
+    prose = (
+        not t or t[:1].islower() or t.endswith((".", ",", ";")) or len(t.split()) > 6
+    )
+    if not prose:
+        return t
+    leaf = (section or "").split("›")[-1].strip()
+    if leaf:
+        return leaf
+    if rows and rows[0]:
+        first = next((c.strip() for c in rows[0] if c.strip()), "")
+        if first:
+            return first[:40]
+    return "Table"
 
-    Scans headings, page markers, and picture-text blocks in document order so
-    each table is labelled with the heading above it and the page it's on. Stored
-    with category 'tables' and the raw rows kept for aligned rendering later.
+
+def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
+    """Build chunks from the structured tables recovered in drive_client.
+
+    Each table dict carries page/chapter/section/title/category/rows. We route it
+    by category — rules→'tables', items→'items', transport→'transport',
+    card→'card' — tag it with a "Chapter › Name" breadcrumb, and keep the cell
+    grid for aligned rendering.
     """
     game, book = _split_game_and_file(path)
-
-    events: list[tuple[int, int, str, object]] = []
-    for m in _SCAN_PAGE.finditer(text):
-        events.append((m.start(), 0, "page", m.group(1)))
-    for m in _SCAN_MD.finditer(text):
-        events.append(
-            (m.start(), 1, "head", (len(m.group(1)), m.group(2).replace("**", "").strip()))
-        )
-    for m in _SCAN_T2K.finditer(text):
-        events.append((m.start(), 1, "head", (1, m.group(2).title().strip())))
-    for m in _PIC_BLOCK.finditer(text):
-        events.append((m.start(), 2, "block", m.group("body")))
-    events.sort(key=lambda e: (e[0], e[1]))
-
-    chapter = section = page = ""
+    cat_map = {
+        "rules": "tables",
+        "items": "items",
+        "transport": "transport",
+        "card": "card",
+    }
     chunks: list[Chunk] = []
-    for _pos, _pri, kind, data in events:
-        if kind == "page":
-            page = data  # type: ignore[assignment]
-        elif kind == "head":
-            level, title = data  # type: ignore[misc]
-            if level <= 1:
-                chapter, section = title, ""
-            else:
-                section = title
-        else:  # block
-            rows = parse_picture_rows(data)  # type: ignore[arg-type]
-            if len(rows) < 2:
-                continue  # not a table (caption, single label, etc.)
-            crumb = " › ".join(p for p in (chapter, section) if p) or rows[0][:60]
-            chunks.append(
-                Chunk(
-                    game=game,
-                    source=book,
-                    category="tables",
-                    section=crumb,
-                    locator=f"p. {page}" if page else "",
-                    text="\n".join(rows),
-                    rows=rows,
-                )
+    for t in tables:
+        rows = t.get("rows") or []
+        if len(rows) < 2:
+            continue
+        name = _table_name(t.get("title", ""), t.get("section", ""), rows)
+        chapter = (t.get("chapter") or "").strip()
+        section = f"{chapter} › {name}" if chapter else name
+        flat = "\n".join(" ".join(c for c in r if c) for r in rows)
+        chunks.append(
+            Chunk(
+                game=game,
+                source=book,
+                category=cat_map.get(t.get("category", "rules"), "tables"),
+                section=section,
+                locator=f"p. {t['page']}" if t.get("page") else "",
+                text=f"{name}\n{flat}",
+                rows=rows,
             )
+        )
     return chunks
 
 
@@ -310,7 +301,7 @@ class RulesService:
         chunks: list[Chunk] = []
         for doc in docs:
             chunks.extend(_chunks_for_doc(doc.name, doc.text))
-            chunks.extend(_tables_for_doc(doc.name, doc.text))
+            chunks.extend(_tables_for_doc(doc.name, doc.tables))
         self.index.build(chunks)
         return {
             "documents": len(docs),
