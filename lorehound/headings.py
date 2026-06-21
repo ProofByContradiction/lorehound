@@ -16,7 +16,8 @@ Prototype (deep-research finding #2). Not yet wired into the extraction path.
 
 from __future__ import annotations
 
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 
 import pymupdf  # PyMuPDF (fitz)
 
@@ -31,7 +32,9 @@ _W_COLOR = 2.5
 _FRAC_MAX = 0.18        # a larger-than-body heading style is rare (share of text)
 _SAMESIZE_FRAC_MAX = 0.03  # a same-size BOLD heading style is rarer still
 _MAX_LEVELS = 6
-_MAX_SAMESIZE_LEN = 60  # a same-size (bold/colour) heading line is short
+_MAX_WORDS = 8          # headings are short; longer = a styled table-header row
+_MAX_LEN = 80           # …or this many characters
+_MAX_SAMESIZE_LEN = 55  # a same-size (bold/colour) heading line is shorter still
 _CAPS_RATIO = 0.6       # …or mostly UPPERCASE
 
 
@@ -120,6 +123,8 @@ class StyleHeadings:
         text = span["text"].strip()
         if len(text) <= 1:
             return ""  # empty, or a drop-cap initial — not a heading
+        if len(text) > _MAX_LEN or len(text.split()) > _MAX_WORDS:
+            return ""  # too long for a heading (e.g. a styled table-header row)
         if size <= self.body_size:
             # Same-size heading (bold/colour): guard against bold inline emphasis —
             # it must be short and either UPPERCASE or coloured.
@@ -128,3 +133,40 @@ class StyleHeadings:
             if not (colored or _caps_ratio(text) >= _CAPS_RATIO):
                 return ""
         return "#" * level + " "
+
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+_MARKUP_RE = re.compile(r"[*_`#]")
+_MAX_REPEATS = 3  # a heading text recurring more than this is a running header/sidebar
+# (real section headings recur ≤2-3×; table-header rows / running labels recur 4×+)
+
+
+def demote_noise(md: str, *, max_repeats: int = _MAX_REPEATS) -> str:
+    """Demote false headings that only the *full line* reveals — table-header
+    rows (too long / too many words) and running headers/sidebars (a heading text
+    that recurs many times). Demoted lines keep their text, minus the ``#`` prefix.
+
+    The per-span ``get_header_id`` can't see these (a table-header line is several
+    short bold spans; recurrence is document-wide), so this runs on the rendered
+    Markdown.
+    """
+    lines = md.splitlines()
+    counts: Counter = Counter()
+    parsed = []
+    for line in lines:
+        m = _HEADING_RE.match(line)
+        visible = _MARKUP_RE.sub("", m.group(2)).strip() if m else None
+        parsed.append((line, m, visible))
+        if visible:
+            counts[visible.lower()] += 1
+
+    out = []
+    for line, m, visible in parsed:
+        if m and visible:
+            too_long = len(visible.split()) > _MAX_WORDS or len(visible) > _MAX_LEN
+            too_repeated = counts[visible.lower()] > max_repeats
+            if too_long or too_repeated:
+                out.append(m.group(2))  # keep the text, drop the heading prefix
+                continue
+        out.append(line)
+    return "\n".join(out)
