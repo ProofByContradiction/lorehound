@@ -115,7 +115,7 @@ class TestTables(unittest.TestCase):
         out, wide = render_table(rows)
         self.assertFalse(wide)  # only 2 columns
         self.assertTrue(out.startswith("```"))
-        self.assertIn("│", out)  # bordered
+        self.assertIn("─", out)  # header underline rule (borderless style)
         for word in ("Legs", "Torso", "Head", "HIT LOCATION"):
             self.assertIn(word, out)
 

@@ -1,13 +1,24 @@
-"""Render structured tables (cell grids) as aligned monospace blocks for Discord.
+"""Render structured tables (cell grids) as clean monospace blocks for Discord.
 
 Tables are recovered upstream as real cell grids by ``pdf_tables`` (PyMuPDF
 find_tables + word-bucketing), so there's no reconstruction here — just
-width-aware, bordered rendering that stays legible in Discord's container.
+width-aware rendering. The style is deliberately *borderless*: a bold header,
+one underline rule, then rows with no per-cell boxes or inter-row separators,
+which reads far cleaner than a full grid (especially for wordy tables). Output
+is an ``ansi`` code block so the header can be emphasized.
 """
 
 from __future__ import annotations
 
 import textwrap
+
+_ESC = "\x1b"
+_HEAD = f"{_ESC}[1;36m"  # bold cyan header row
+_RESET = f"{_ESC}[0m"
+_GAP = "   "             # column separator (3 spaces)
+_BUDGET = 78            # target content width — desktop-friendly; mobile scrolls
+_MIN_COL = 3
+_MAX_COL = 32           # a single column never gets wider than this before wrapping
 
 
 def _wrap_cell(text: str, width: int) -> list[str]:
@@ -18,75 +29,27 @@ def _wrap_cell(text: str, width: int) -> list[str]:
     ) or [""]
 
 
-def _box(
-    rows_cells: list[list[str]],
-    aligns: list[str],
-    caps: list[int],
-    has_header: bool = True,
-    row_seps: bool = False,
-) -> str:
-    """Draw cells as a bordered monospace table, wrapping cell text to ``caps``
-    (per-column max widths) so wide tables stay legible.
-
-    ``has_header`` draws a heavier rule under the first row. ``row_seps`` draws a
-    light rule between every body row — used when cells wrap, so multi-line rows
-    don't read ambiguously.
-    """
-    ncols = max(len(r) for r in rows_cells)
-    grid = [list(r) + [""] * (ncols - len(r)) for r in rows_cells]
-    caps = list(caps) + [40] * (ncols - len(caps))
-    wrapped = [[_wrap_cell(c, caps[i]) for i, c in enumerate(r)] for r in grid]
-
-    widths = [0] * ncols
-    for r in wrapped:
-        for i, cell_lines in enumerate(r):
-            widths[i] = max(widths[i], *(len(ln) for ln in cell_lines))
-    widths = [min(widths[i], caps[i]) for i in range(ncols)]
-
-    def rule(left: str, mid: str, right: str) -> str:
-        return left + mid.join("─" * (w + 2) for w in widths) + right
-
-    def render(cell_lines_row: list[list[str]]) -> list[str]:
-        height = max(len(c) for c in cell_lines_row)
-        out = []
-        for li in range(height):
-            cells = []
-            for i, cell_lines in enumerate(cell_lines_row):
-                txt = cell_lines[li] if li < len(cell_lines) else ""
-                align = aligns[i] if i < len(aligns) else "l"
-                txt = txt.center(widths[i]) if align == "c" else txt.ljust(widths[i])
-                cells.append(f" {txt} ")
-            out.append("│" + "│".join(cells) + "│")
-        return out
-
-    lines = [rule("┌", "┬", "┐")]
-    start = 0
-    if has_header:
-        lines += render(wrapped[0])
-        lines.append(rule("├", "┼", "┤"))
-        start = 1
-    for idx, r in enumerate(wrapped[start:]):
-        if row_seps and idx > 0:
-            lines.append(rule("├", "┼", "┤"))
-        lines += render(r)
-    lines.append(rule("└", "┴", "┘"))
-    return "\n".join(lines)
-
-
-def _wraps(cells: list[list[str]], caps: list[int]) -> bool:
-    """True if any cell would wrap to more than one line at the given caps."""
-    return any(
-        len(_wrap_cell(c, caps[i] if i < len(caps) else 40)) > 1
-        for row in cells
-        for i, c in enumerate(row)
-    )
+def _fit_widths(nat: list[int], budget: int) -> list[int]:
+    """Water-fill column widths: the largest uniform cap ``W`` such that the
+    columns (each clamped to ``W``) still fit ``budget``. Narrow columns keep
+    their natural width; only the wide ones get clamped (and wrap)."""
+    if sum(nat) <= budget:
+        return nat[:]
+    lo, hi, best = _MIN_COL, max(nat), _MIN_COL
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if sum(min(n, mid) for n in nat) <= budget:
+            best, lo = mid, mid + 1
+        else:
+            hi = mid - 1
+    return [min(n, best) for n in nat]
 
 
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
-    """Render a cell grid (first row = header) as a bordered monospace table.
+    """Render a cell grid (first row = header) as a clean monospace table.
 
-    Returns ``(code_block, wide)`` — ``wide`` flags many-column tables that may
-    still scroll horizontally on narrow screens.
+    Returns ``(code_block, wide)`` — ``wide`` flags tables likely to scroll
+    sideways on a narrow (mobile) screen.
     """
     grid = [
         [(c or "").strip() for c in r]
@@ -97,12 +60,37 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
         return "```\n(empty table)\n```", False
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
-    cap = max(6, min(22, 110 // ncols))  # tighter caps as columns grow
-    caps = [cap] * ncols
+
+    nat = [
+        max(_MIN_COL, min(_MAX_COL, max((len(grid[r][i]) for r in range(len(grid))), default=0)))
+        for i in range(ncols)
+    ]
+    gap = len(_GAP) * (ncols - 1)
+    widths = _fit_widths(nat, max(_BUDGET - gap, ncols * _MIN_COL))
+
     # Centre short "code" columns (die rolls, modifiers); left-align wordy ones.
     aligns = []
     for i in range(ncols):
         col = [grid[r][i] for r in range(len(grid)) if grid[r][i]]
         aligns.append("c" if col and all(len(c) <= 4 for c in col) else "l")
-    block = _box(grid, aligns, caps, row_seps=_wraps(grid, caps))
-    return "```\n" + block + "\n```", ncols >= 6
+
+    def fmt_row(r: int) -> list[str]:
+        wrapped = [_wrap_cell(grid[r][i], widths[i]) for i in range(ncols)]
+        height = max(len(c) for c in wrapped)
+        out = []
+        for li in range(height):
+            parts = []
+            for i in range(ncols):
+                txt = wrapped[i][li] if li < len(wrapped[i]) else ""
+                txt = txt.center(widths[i]) if aligns[i] == "c" else txt.ljust(widths[i])
+                parts.append(txt)
+            out.append(_GAP.join(parts).rstrip())
+        return out
+
+    lines = [f"{_HEAD}{ln}{_RESET}" for ln in fmt_row(0)]  # bold header (may wrap)
+    lines.append(_GAP.join("─" * widths[i] for i in range(ncols)))
+    for r in range(1, len(grid)):
+        lines += fmt_row(r)
+
+    wide = ncols >= 6 or (sum(widths) + gap) > 58
+    return "```ansi\n" + "\n".join(lines) + "\n```", wide

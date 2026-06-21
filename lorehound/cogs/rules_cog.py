@@ -240,14 +240,14 @@ class ResultsView(discord.ui.LayoutView):
             for item in _detail_items(hits[selected], query):
                 container.add_item(item)
         container.add_item(ui.separator())
-        select_row = discord.ui.ActionRow()
-        select_row.add_item(ResultSelect(hits, query, title, subtitle, selected))
-        container.add_item(select_row)
-        button_row = discord.ui.ActionRow()
-        button_row.add_item(
-            ShowInChannelButton(hits[selected] if selected is not None else None, query)
-        )
-        container.add_item(button_row)
+        row = discord.ui.ActionRow()
+        if selected is None:
+            # List view: a dropdown to pick a result.
+            row.add_item(ResultSelect(hits, query, title, subtitle, selected))
+        else:
+            # Detail view: the dropdown is gone — offer to share the picked result.
+            row.add_item(ShowInChannelButton(hits[selected], query))
+        container.add_item(row)
         self.add_item(container)
 
 
@@ -412,14 +412,18 @@ class RulesCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # Open straight on the best match; the select switches among the rest.
-        view = ResultsView(
-            hits,
-            name,
-            title=f"📊 Tables: {name}",
-            subtitle=f"in **{game}** — **{len(hits)}** matches.",
-            selected=0,
-        )
+        # One match → open straight on it (no dropdown). Several → show the list
+        # so the player picks; the dropdown then disappears on the detail view.
+        if len(hits) == 1:
+            view = ResultsView(
+                hits, name, title=f"📊 Tables: {name}",
+                subtitle=f"in **{game}** — 1 match.", selected=0,
+            )
+        else:
+            view = ResultsView(
+                hits, name, title=f"📊 Tables: {name}",
+                subtitle=f"in **{game}** — **{len(hits)}** matches. Pick one to read:",
+            )
         await interaction.response.send_message(view=view, ephemeral=True)
 
     # --- Library management -------------------------------------------------
