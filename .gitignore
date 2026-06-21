@@ -27,3 +27,6 @@ data/
 
 # Experimental art variants — keep the chosen icon/banner, skip the bulk
 assets/alternates/
+
+# Table-extraction audit output (dev tool: scripts/table_audit.py)
+table-audit/

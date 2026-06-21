@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from .pdf_tables import classify_table, extract_tables
 
 # Read-only access is all we need.
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -27,7 +29,7 @@ GOOGLE_DOC = "application/vnd.google-apps.document"
 GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
 # Bump to invalidate all caches when the extraction method/output changes.
-EXTRACT_VERSION = "pymupdf-md-v1"
+EXTRACT_VERSION = "pymupdf-md-v2-tables"
 
 
 @dataclass
@@ -36,6 +38,9 @@ class DriveDoc:
     name: str          # subfolder-aware label, e.g. "Twilight: 2000/T2K Lore.pdf"
     mime_type: str
     text: str
+    # Structured tables recovered from the PDF: each
+    # {page, chapter, section, title, category, rows}.
+    tables: list[dict] = field(default_factory=list)
 
 
 class DriveNotConfigured(RuntimeError):
@@ -155,9 +160,15 @@ class DriveClient:
         )
         return data.decode("utf-8") if isinstance(data, bytes) else str(data)
 
-    def _extract_pdf(self, data: bytes) -> str:
-        """PDF bytes -> Markdown with one ``[[page N]]`` marker per page."""
+    def _extract_pdf(self, data: bytes) -> tuple[str, list[dict]]:
+        """PDF bytes -> (Markdown with one ``[[page N]]`` marker per page,
+        structured tables recovered via pdf_tables)."""
         import fitz  # PyMuPDF
+
+        # Tables FIRST (clean subprocess): importing pymupdf4llm in-process
+        # corrupts PyMuPDF's find_tables, so table detection must run isolated.
+        tables = self._pdf_tables(data)
+
         import pymupdf4llm
 
         doc = fitz.open(stream=data, filetype="pdf")
@@ -171,31 +182,103 @@ class DriveClient:
         for i, p in enumerate(pages, start=1):
             md = p.get("text", "") if isinstance(p, dict) else str(p)
             out.append(f"[[page {i}]]\n{md}")
-        return "\n\n".join(out)
+        return "\n\n".join(out), tables
 
-    def _extract_text(self, f: dict) -> str:
-        """Extract plain text/Markdown from one file dict, or '' if unsupported."""
+    def _pdf_tables(self, data: bytes) -> list[dict]:
+        """Recover structured tables (via an isolated subprocess), tagging each
+        with its TOC chapter/section and a routing category."""
+        import os
+        import subprocess
+        import sys
+        import tempfile
+
+        import fitz
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+            tf.write(data)
+            tmp = tf.name
+        raw: list[dict] = []
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "lorehound.pdf_tables", tmp],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                cwd=str(Path(__file__).resolve().parent.parent),
+            )
+            if proc.stdout.strip():
+                raw = json.loads(proc.stdout)
+            if proc.returncode != 0:
+                print(f"[drive] table subprocess rc={proc.returncode}: {proc.stderr[:200]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[drive] table extraction failed: {exc}")
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+        doc = fitz.open(stream=data, filetype="pdf")
+        toc = doc.get_toc() or []
+        doc.close()
+
+        def chapter_section(page_no: int) -> tuple[str, str]:
+            chap = sec = ""
+            for level, title, pg in toc:
+                if pg > page_no:
+                    break
+                if level == 1:
+                    chap, sec = title, ""
+                elif level == 2:
+                    sec = title
+            return chap.split(".", 1)[-1].strip(), sec
+
+        out: list[dict] = []
+        for t in raw:
+            chap, sec = chapter_section(t["page"])
+            if chap.lower().startswith("contents"):
+                continue  # the book's own table of contents, not a game table
+            category = classify_table(chap, t["rows"])
+            if category == "noise":
+                continue
+            out.append(
+                {
+                    "page": t["page"],
+                    "chapter": chap,
+                    "section": sec,
+                    "title": t["title"],
+                    "category": category,
+                    "rows": t["rows"],
+                }
+            )
+        return out
+
+    def _extract_text(self, f: dict) -> tuple[str, list[dict]]:
+        """Extract (text/Markdown, tables) from a file dict; ('', []) if unsupported."""
         mime = f["mimeType"]
         name = f["name"]
         try:
             if mime == GOOGLE_DOC:
-                return self._export_google_doc(f["id"])
+                return self._export_google_doc(f["id"]), []
             if mime == "application/pdf" or name.lower().endswith(".pdf"):
                 return self._extract_pdf(self._download_bytes(f["id"]))
             if mime.startswith("text/") or name.lower().endswith((".txt", ".md")):
-                return self._download_bytes(f["id"]).decode("utf-8", errors="replace")
+                return (
+                    self._download_bytes(f["id"]).decode("utf-8", errors="replace"),
+                    [],
+                )
         except Exception as exc:  # noqa: BLE001 - report and keep going
             print(f"[drive] failed to read {name}: {exc}")
-            return ""
-        return ""  # spreadsheets, images, etc.
+            return "", []
+        return "", []  # spreadsheets, images, etc.
 
     # --- Cache --------------------------------------------------------------
 
     def _cache_file(self, file_id: str) -> Path | None:
         return self.cache_dir / f"{file_id}.json" if self.cache_dir else None
 
-    def _read_cache(self, file_id: str, modified: str) -> str | None:
-        """Return cached text if present, current, and same extractor version."""
+    def _read_cache(self, file_id: str, modified: str) -> tuple[str, list[dict]] | None:
+        """Return cached (text, tables) if present, current, and same version."""
         path = self._cache_file(file_id)
         if not path or not path.exists():
             return None
@@ -205,23 +288,30 @@ class DriveClient:
             return None
         if data.get("v") != EXTRACT_VERSION or data.get("modifiedTime") != modified:
             return None
-        return data.get("text", "")
+        return data.get("text", ""), data.get("tables", [])
 
-    def _write_cache(self, file_id: str, modified: str, text: str) -> None:
+    def _write_cache(
+        self, file_id: str, modified: str, text: str, tables: list[dict]
+    ) -> None:
         path = self._cache_file(file_id)
         if not path:
             return
         try:
             path.write_text(
                 json.dumps(
-                    {"v": EXTRACT_VERSION, "modifiedTime": modified, "text": text}
+                    {
+                        "v": EXTRACT_VERSION,
+                        "modifiedTime": modified,
+                        "text": text,
+                        "tables": tables,
+                    }
                 )
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[drive] cache write failed for {file_id}: {exc}")
 
     def fetch_all(self) -> list[DriveDoc]:
-        """Download and extract text from every supported file (cache-aware)."""
+        """Download and extract text + tables from every supported file (cached)."""
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -229,10 +319,12 @@ class DriveClient:
         for f in self.list_files():
             source = f.get("path", f["name"])
             modified = f.get("modifiedTime", "")
-            text = self._read_cache(f["id"], modified)
-            if text is None:
-                text = self._extract_text(f)
-                self._write_cache(f["id"], modified, text)
+            cached = self._read_cache(f["id"], modified)
+            if cached is None:
+                text, tables = self._extract_text(f)
+                self._write_cache(f["id"], modified, text, tables)
+            else:
+                text, tables = cached
             if text.strip():
                 docs.append(
                     DriveDoc(
@@ -240,6 +332,7 @@ class DriveClient:
                         name=source,
                         mime_type=f["mimeType"],
                         text=text,
+                        tables=tables,
                     )
                 )
         return docs
