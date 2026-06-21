@@ -290,6 +290,23 @@ class DriveClient:
             return None
         return data.get("text", ""), data.get("tables", [])
 
+    def _read_cached_text(self, file_id: str, modified: str) -> str | None:
+        """Cached Markdown for an *unchanged* file regardless of extractor version.
+
+        Lets a version bump that only adds tables reuse the (unchanged) Markdown
+        instead of re-running the slow to_markdown."""
+        path = self._cache_file(file_id)
+        if not path or not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text())
+        except Exception:  # noqa: BLE001
+            return None
+        if data.get("modifiedTime") != modified:
+            return None  # file changed → re-extract from scratch
+        text = data.get("text", "")
+        return text if text.strip() else None
+
     def _write_cache(
         self, file_id: str, modified: str, text: str, tables: list[dict]
     ) -> None:
@@ -320,11 +337,20 @@ class DriveClient:
             source = f.get("path", f["name"])
             modified = f.get("modifiedTime", "")
             cached = self._read_cache(f["id"], modified)
-            if cached is None:
-                text, tables = self._extract_text(f)
-                self._write_cache(f["id"], modified, text, tables)
-            else:
+            if cached is not None:
                 text, tables = cached
+            else:
+                reused = self._read_cached_text(f["id"], modified)
+                is_pdf = f["mimeType"] == "application/pdf" or f["name"].lower().endswith(
+                    ".pdf"
+                )
+                if reused is not None and is_pdf:
+                    # Markdown unchanged — only the tables are new; skip to_markdown.
+                    tables = self._pdf_tables(self._download_bytes(f["id"]))
+                    text = reused
+                else:
+                    text, tables = self._extract_text(f)
+                self._write_cache(f["id"], modified, text, tables)
             if text.strip():
                 docs.append(
                     DriveDoc(
