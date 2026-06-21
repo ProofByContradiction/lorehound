@@ -80,6 +80,48 @@ def _resolve(arg):
     return path
 
 
+def triage(cache_dir="cache"):
+    """Sweep every cached book and flag the ones that need attention: no embedded
+    ToC (rely on StyleHeadings alone), or sub-perfect Style+ToC recall (likely a
+    page-offset bug or unusual styling). 'before' = headings in the current cache
+    (font-size path); 'after' = Style+ToC. One extraction per book."""
+    import glob
+    import json
+
+    rows = []
+    for jf in sorted(glob.glob(os.path.join(cache_dir, "*.json"))):
+        fid = os.path.basename(jf)[:-5]
+        try:
+            cached = json.load(open(jf)).get("text", "")
+        except Exception:
+            continue
+        if cached.count("[[page ") < 10:
+            continue  # skip tiny docs / google-doc exports
+        before = sum(1 for l in cached.splitlines() if l.lstrip().startswith("#"))
+        try:
+            doc = fitz.open(_resolve(fid))
+        except Exception as e:
+            rows.append((fid, 0, 0, before, 0, None, f"DOWNLOAD-FAIL {e}"))
+            continue
+        toc = doc.get_toc()
+        hbp = _by_page(fitz.open(_resolve(fid)), StyleHeadings(doc), demote=True, inject=True)
+        after = sum(len(v) for v in hbp.values())
+        hit, total = _recall(doc, hbp) if toc else (0, 0)
+        rec = hit / total if total else None
+        flags = []
+        if not toc:
+            flags.append("NO-TOC")
+        elif rec < 0.9:
+            flags.append("LOW-RECALL")
+        rows.append((fid, doc.page_count, total, before, after, rec, " ".join(flags)))
+
+    rows.sort(key=lambda r: (r[5] is not None, r[5] if r[5] is not None else -1))
+    print(f"{'file_id':<16} {'pp':>4} {'toc':>4} {'before':>6} {'after':>6} {'recall':>7}  flags")
+    for fid, pp, toc_n, before, after, rec, flags in rows:
+        rc = f"{rec*100:.0f}%" if rec is not None else "no-ToC"
+        print(f"{fid[:16]:<16} {pp:>4} {toc_n:>4} {before:>6} {after:>6} {rc:>7}  {flags}")
+
+
 def main(args):
     methods = [
         ("default(size)", lambda d: IdentifyHeaders(d), {}),
@@ -102,4 +144,7 @@ def main(args):
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    main(sys.argv[1:])
+    if sys.argv[1] == "--triage":
+        triage(*sys.argv[2:])
+    else:
+        main(sys.argv[1:])

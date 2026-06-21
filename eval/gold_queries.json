@@ -1,0 +1,102 @@
+{
+  "_readme": {
+    "purpose": "Answer key for the post-wiring RETRIEVAL eval: run each `query` through /rule (or rules.search) and check the returned passage semantically contains `key_facts`. Measures whether the live bot returns CORRECT answers, the true north-star metric that heading/chunking quality only serves.",
+    "how_to_score": "For each entry: retrieve top chunk(s) for `query` scoped to `system`; pass if every key_fact is present/paraphrased in a retrieved chunk. Use semantic matching (wording differs by edition), not string equality.",
+    "source_tiers": {
+      "srd-ogl": "Open SRD published under OGL — authoritative but Mongoose 1e-derived; verify edition_sensitive entries against the 2E book.",
+      "repo-mechanics": "Encoded in lorehound/twilight.py (unit-tested); trusted for T2K 4E core mechanics since no free T2K SRD exists.",
+      "foundry-vtt": "Community Foundry VTT system data (github fria-ligan) — weak authority; only a fallback for T2K gear stats, not yet pulled."
+    },
+    "caveats": [
+      "traveller-srd.com is Mongoose 1e OGL content; your library is Mongoose 2E. Core resolution + characteristic/difficulty DMs are edition-stable; equipment/vehicle/ship-design values are NOT — flagged per entry.",
+      "T2K (Free League 4E) has no free authoritative SRD; T2K entries below are core mechanics from twilight.py, not an external source."
+    ],
+    "created": "2026-06-21",
+    "status": "prototype gold set — expand when wiring the heading work and when new sources arrive"
+  },
+  "entries": [
+    {
+      "id": "trav-task-resolution",
+      "system": "Traveller (Mongoose)",
+      "query": "How do I make a skill check?",
+      "key_facts": ["roll 2D6", "add skill level", "add the characteristic DM", "8+ succeeds (Average difficulty)"],
+      "source": "https://www.traveller-srd.com/core-rules/skills/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": false
+    },
+    {
+      "id": "trav-difficulty-dms",
+      "system": "Traveller (Mongoose)",
+      "query": "What are the task difficulty modifiers?",
+      "key_facts": ["Simple +6", "Easy +4", "Routine +2", "Average +0", "Difficult -2", "Very Difficult -4", "Formidable -6"],
+      "source": "https://www.traveller-srd.com/core-rules/skills/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": false
+    },
+    {
+      "id": "trav-untrained-penalty",
+      "system": "Traveller (Mongoose)",
+      "query": "What happens if I use a skill I'm untrained in?",
+      "key_facts": ["-3 DM", "unskilled / untrained penalty"],
+      "source": "https://www.traveller-srd.com/core-rules/skills/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": false
+    },
+    {
+      "id": "trav-effect",
+      "system": "Traveller (Mongoose)",
+      "query": "How is the Effect of a roll calculated?",
+      "key_facts": ["subtract 8 from the total (roll + DMs)", "margin of success"],
+      "source": "https://www.traveller-srd.com/core-rules/die-roll-conventions/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": false
+    },
+    {
+      "id": "trav-characteristic-dm",
+      "system": "Traveller (Mongoose)",
+      "query": "What is the dice modifier for a characteristic value of 9?",
+      "key_facts": ["+1", "characteristic 9-11 gives DM +1", "table: 0=-3, 1-2=-2, 3-5=-1, 6-8=+0, 9-11=+1, 12-14=+2, 15+=+3"],
+      "source": "https://www.traveller-srd.com/core-rules/die-roll-conventions/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": false,
+      "notes": "Standard MGT characteristic-DM table; confirm exact bands against the 2E core book."
+    },
+    {
+      "id": "trav-battledress-cost",
+      "system": "Traveller (Mongoose)",
+      "query": "How much does Battle Dress cost?",
+      "key_facts": ["~200,000 Credits (medium chassis, TL 9-10)", "+2 Strength", "12 equipment slots"],
+      "source": "https://www.traveller-srd.com/core-rules/vehicles/",
+      "source_tier": "srd-ogl",
+      "edition_sensitive": true,
+      "notes": "Equipment/design value — likely DIFFERS in 2E; verify against the 2E book before trusting."
+    },
+    {
+      "id": "t2k-skill-check",
+      "system": "Twilight 2000 (4E)",
+      "query": "How do I make a skill check?",
+      "key_facts": ["roll attribute die + skill die (step dice: A=d12, B=d10, C=d8, D=d6)", "each die 6+ is a success", "10+ on a die counts as two successes", "one success = you succeed"],
+      "source": "lorehound/twilight.py",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false
+    },
+    {
+      "id": "t2k-ones-jam",
+      "system": "Twilight 2000 (4E)",
+      "query": "What do 1s mean when I roll?",
+      "key_facts": ["1s are the jam / reliability symbol", "on a push each 1 costs weapon reliability", "two or more 1s can jam the weapon"],
+      "source": "lorehound/twilight.py",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false
+    },
+    {
+      "id": "t2k-ammo-dice",
+      "system": "Twilight 2000 (4E)",
+      "query": "How do ammo dice work?",
+      "key_facts": ["ammo dice are D6 rolled with a ranged attack", "each 6 is an extra hit (only if the attack hits)", "rounds spent = sum of the ammo dice + 1"],
+      "source": "lorehound/twilight.py",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false
+    }
+  ]
+}
