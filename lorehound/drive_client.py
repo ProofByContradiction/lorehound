@@ -7,12 +7,12 @@ key either as a file path (GOOGLE_CREDENTIALS_FILE) or as the raw JSON
 
 PDF text is extracted with PyMuPDF (pymupdf4llm) to Markdown — it handles
 multi-column reading order and tables far better than pypdf, and the Markdown
-headings let us chunk by section. We run pymupdf4llm in its *ML-free* mode
-(``use_layout(False)``): the pure-Python font-histogram heading detection and
-``column_boxes`` reading order, without the optional pymupdf-layout ONNX model
-(~100MB of deps, ~40s/book). Extracted text is cached to disk (keyed by Drive
-file id + last-modified time + extractor version) so restarts/syncs only
-re-download files that actually changed.
+headings let us chunk by section. We pin pymupdf4llm 0.3.4, whose heading
+detection (font-size histogram) + ``column_boxes`` reading order are pure-Python
+and never pull pymupdf-layout (-> onnxruntime + numpy, ~100MB) — that ML layout
+model is an opt-in extra we don't install. Extracted text is cached to disk
+(keyed by Drive file id + last-modified time + extractor version) so
+restarts/syncs only re-download files that actually changed.
 """
 
 from __future__ import annotations
@@ -188,10 +188,12 @@ class DriveClient:
         import fitz  # PyMuPDF
         import pymupdf4llm
 
-        # Detach the optional pymupdf-layout ONNX model: use the pure-Python
-        # font-size heading detection and multi-column reading order. Idempotent,
-        # and a no-op when pymupdf-layout isn't installed.
-        pymupdf4llm.use_layout(False)
+        # pymupdf4llm 0.3.4 is ML-free by default (font-size headings +
+        # column_boxes reading order). Newer 1.27.x builds add an opt-in ONNX
+        # layout model via use_layout(); turn it off if running against one of
+        # those (0.3.4 has no such function, so guard the call).
+        if hasattr(pymupdf4llm, "use_layout"):
+            pymupdf4llm.use_layout(False)
 
         doc = fitz.open(stream=data, filetype="pdf")
         try:

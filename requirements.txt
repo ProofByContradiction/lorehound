@@ -7,14 +7,17 @@ google-auth>=2.20
 google-auth-httplib2>=0.2
 
 # PDF text extraction — PyMuPDF + pymupdf4llm (Markdown with headings + multi-
-# column reading order; drives the heading-aware chunking). NOTE: 1.27+ pulls
-# pymupdf-layout -> onnxruntime + numpy (~100MB) for the ML heading/layout
-# detection our chunking relies on. Heavy for free hosting; slimming it with a
-# dependency-light heading detector is a tracked future task.
-pymupdf4llm==1.27.2.3
+# column reading order; drives the heading-aware chunking). We pin pymupdf4llm
+# 0.3.4 — the last release before 1.27.x made pymupdf-layout a HARD dependency.
+# Its heading detection (font-size histogram) + column_boxes reading order are
+# pure-Python and produce output identical to 1.27.x's ML-free path, but it
+# leaves pymupdf-layout (-> onnxruntime + numpy, ~100MB) as an opt-in extra we
+# don't install. Keep pymupdf modern (column_boxes needs >= 1.24.2).
+pymupdf==1.27.2.3
+pymupdf4llm==0.3.4
 
 # Local .env loading (no-op in production if absent)
 python-dotenv>=1.0
 
-# NOTE: the search engine itself is a dependency-free BM25 (search_index.py).
-# The heavy footprint comes only from pymupdf4llm's PDF layout analysis (above).
+# NOTE: the search engine itself is a dependency-free BM25 (search_index.py),
+# and with the 0.3.4 pin above there's no onnxruntime/numpy in the tree.
