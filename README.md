@@ -1,148 +1,210 @@
-# 🐕 Lorehound
+# lorehound
 
-A private Discord helper bot for tabletop RPGs — built first for **Twilight 2000
-(4th edition)**, designed to grow into a general RPG assistant you can point at
-any rules content.
+> Tabletop rules and dice, one slash command away.
 
-**What it does today**
+`lorehound` is a **self-hosted Discord bot** that rolls dice and turns your
+**rulebook library** — PDFs, text, and Google Docs in a Google Drive folder —
+into fast, in-chat lookups. Mid-session, pull a rule, a weapon stat block, or a
+table without leaving Discord to dig through a PDF. It is **system-agnostic**:
+point it at any game's books and search them with `source:<game>`. Twilight 2000
+(4E) additionally gets first-class dice mechanics.
 
-- 🎲 **Dice rolling** — generic dice notation (`2d6+1`, `d20`, `3d8-2`,
-  `2d6 + 1d8`), quick single-type rolls (d4–d100), and Twilight 2000 mechanics
-  (attribute + skill checks, ammo dice).
-- 📚 **Rules lookup** — pulls your rulebooks (PDFs, text, and Google Docs) from a
-  Google Drive folder and answers `/rule <topic>` with the most relevant
-  passages, cited by document and page.
+```
+          >_ 🐕 lorehound
+```
 
----
+Self-hosted and single-purpose. **Free to run** — local BM25 search, no paid
+APIs, no embeddings, no vector DB, no GPU. **Bring your own books.** Runs on a
+free hosting tier or a spare machine in ~15 minutes.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `/roll dice:2d6+1` | Roll any dice expression. |
-| `/d sides:6 count:3` | Quick-roll N dice of one type. |
-| `/t2k attribute:B skill:C` | Twilight 2000 check (B=d10, C=d8). Skill is optional. |
-| `/ammo count:5` | Roll 5 ammo dice (D6); 6s flagged as extra hits. |
-| `/rule query:recoil` | Search the rulebooks for a topic. |
-| `/rules_sync` | Re-pull and re-index the docs from Drive. |
-| `/sources` | List the documents currently indexed. |
+Slash commands (`/help` is authoritative):
 
-> **Twilight 2000 dice — please double-check me.** I encoded A=d12, B=d10,
-> C=d8, D=d6; each die showing **6+** is a success; ammo-die **6s** are extra
-> hits. Ammo/round *depletion is intentionally not tracked* — players track
-> their own spent rounds; the bot only rolls and reads dice. See
-> `lorehound/twilight.py`.
-
----
-
-## Setup
-
-### 0. Install dependencies
-
-Python 3.11–3.13 is the safe target (3.14 is very new; some libs may lag). From
-the project folder:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+```
+/roll dice:2d6+1                    # roll any notation: d20, 3d8-2, 2d6 + 1d8   · public
+/d sides:20 count:2                 # quick-roll N dice of one type, d4–d100     · public
+/t2k attribute:B skill:C ammo:5     # Twilight 2000 check: attribute+skill+ammo  · public
+/rule source:<game> query:<topic>   # how to play: stats, abilities, specialties
+/item source:<game> query:<topic>   # gear, weapons, equipment
+/transport source:<game> query:…    # vehicles, ships, craft, mounts & parts
+/table source:<game> name:<table>   # find & print a rules table
+/sources                            # list the games + books available
+/rules_sync                         # re-pull and re-index the library from Drive
 ```
 
-### 1. Create the Discord bot
+Lookups (`/rule`, `/item`, `/transport`, `/table`) take a `source:` game (with
+autocomplete) and most take an optional `book:`. They reply **privately** with a
+ranked list — pick one to read in full (cited by book + page), then optionally
+**📢 Show in channel**. Only dice rolls and @mention replies are public.
 
-1. Go to <https://discord.com/developers/applications> → **New Application**.
-2. Open the **Bot** tab → **Add Bot** → **Reset Token** and copy the token.
-3. Under **Installation** (or **OAuth2 → URL Generator**), select the
-   `applications.commands` and `bot` scopes, give it the **Send Messages** /
-   **Use Slash Commands** permissions, and use the generated URL to invite it to
-   your private server.
-4. Copy `.env.example` to `.env` and paste the token into `DISCORD_TOKEN`.
-5. (Recommended) Put your server's ID in `DISCORD_GUILD_ID` so slash commands
-   appear instantly. Enable Developer Mode in Discord, right-click the server →
-   **Copy Server ID**.
+**Twilight 2000 dice — double-check me.** Ratings A=d12 B=d10 C=d8 D=d6; each die
+**6+** is a success (10+ counts as two); ammo-die **6s** are extra hits and **1s**
+are the jam/push symbol. Round depletion is *not* tracked — players count their
+own spent rounds. See `lorehound/twilight.py`.
 
-You can now run the bot with just dice support:
+## Why it's built this way
+
+- **Free, local search.** Retrieval is a tiny built-in BM25 index
+  (`search_index.py`) — no paid search/embedding APIs, no vector DB, no GPU.
+  Nothing about a query leaves your host. The tradeoff (keyword vs. semantic) is
+  the right one for rulebooks, where you usually know the term.
+- **Your books are the source of truth, via Drive.** Nothing is bundled. A GM
+  drops a book in the Drive folder and runs `/rules_sync` — no redeploy. The
+  folder *is* the taxonomy: **one subfolder per game**, and that name becomes the
+  `source:` value.
+- **Config is environment variables, not a committed file.** Keeps secrets out of
+  git, matches how cloud hosts inject config (paste env vars; no file to upload),
+  and the *same mechanism* works in local dev and production.
+- **Private by default.** Lookups are ephemeral; **Show in channel** shares one on
+  purpose. Channels stay uncluttered.
+- **Surface, don't adjudicate.** Every result is footnoted with book + page and
+  reminds players to verify. Lorehound finds text; the table makes the ruling.
+- **Least privilege.** Read-only Drive scope; no privileged Discord intents.
+
+## Quickstart
+
+Get a Discord bot token and (optionally) a Drive folder of books, then:
 
 ```bash
-python bot.py
+git clone <this-repo> lorehound && cd lorehound
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt          # Python 3.11+ (run on 3.14)
+cp .env.example .env                      # then fill in DISCORD_TOKEN
+./run.sh                                  # foreground; Ctrl-C to stop
 ```
 
-### 2. Connect Google Drive (rules lookup)
+**1 · Discord bot.** <https://discord.com/developers/applications> → New
+Application → **Bot → Reset Token** (that's `DISCORD_TOKEN`). Invite it via
+**Installation** / **OAuth2 → URL Generator** with scopes `bot` +
+`applications.commands` and perms *Send Messages, Embed Links, Read Message
+History*. For instant command updates while testing, set `DISCORD_GUILD_ID` to
+your server ID (Developer Mode → right-click server → Copy Server ID).
 
-1. Go to <https://console.cloud.google.com/> → create (or pick) a project.
-2. **APIs & Services → Library →** enable the **Google Drive API**.
-3. **APIs & Services → Credentials → Create Credentials → Service account.**
-   Name it (e.g. `lorehound-reader`), create it, then open it → **Keys → Add
-   key → JSON**. A key file downloads.
-4. Put that file in the project as `service_account.json` (it's gitignored), or
-   paste its contents into `GOOGLE_CREDENTIALS_JSON` in `.env`.
-5. Copy the **service account email** (looks like
-   `lorehound-reader@your-project.iam.gserviceaccount.com`).
-6. In Google Drive, create a folder for your rules, drop your PDFs / text /
-   Google Docs in it, and **Share** the folder with that service-account email
-   (Viewer is enough).
-7. Copy the folder ID from its URL
-   (`https://drive.google.com/drive/folders/<THIS>`) into `DRIVE_FOLDER_ID`.
-8. Start the bot and run `/rules_sync`. Then try `/rule <topic>`.
+**2 · Google Drive (rules lookup).** In Google Cloud: enable the **Drive API**,
+create a **service account**, add a **JSON key**. Save it as `service_account.json`
+(gitignored) or paste it into `GOOGLE_CREDENTIALS_JSON`. In Drive: make a top
+folder, add **one subfolder per game**, drop books in, **Share** the top folder
+with the service-account email (Viewer), and put its ID (`…/folders/<THIS>`) in
+`DRIVE_FOLDER_ID`. Start the bot, run `/rules_sync`, then `/rule source:<game>
+query:<topic>`.
 
----
+## Configuration
+
+All settings are **environment variables**, loaded from a `.env` file locally
+(via `python-dotenv`) or set in your host's dashboard in production. `.env` is
+gitignored; only `.env.example` (placeholders) is committed.
+
+| Variable | Type | Required | Example | What it's for |
+|---|---|---|---|---|
+| `DISCORD_TOKEN` | string (secret) | **yes** | `MTk4N…Xq3` | Bot token from the Developer Portal. The bot won't start without it. |
+| `DISCORD_GUILD_ID` | int (snowflake) | no | `1173070855526420642` | Sync slash commands to one server **instantly** (dev). Blank = global (~1h to appear). |
+| `LOREHOUND_USER_INSTALL` | bool (`1`/`true`/`yes`/`on`) | no | `1` | Register as a **user-installable** app so commands work in DMs/group DMs. Forces global sync; needs "User Install" enabled in the portal. |
+| `DRIVE_FOLDER_ID` | string | no¹ | `1A2WAkinj7N4_wg7…` | Drive folder holding the library (`…/folders/<THIS>`). Enables the rules features. |
+| `GOOGLE_CREDENTIALS_FILE` | string (path) | no¹ | `service_account.json` | Path to the service-account key **file**. Best for local dev. |
+| `GOOGLE_CREDENTIALS_JSON` | string (JSON, secret) | no¹ | `{"type":"service_account",…}` | The key as **inline JSON** (one line). Best for cloud hosts. **Wins** over `…_FILE`. |
+| `LOREHOUND_SMOKE_TEST` | bool (any non-empty) | no | `1` | Diagnostic: log in, sync, confirm, then **exit** (doesn't stay up). Verifies a token/deploy. |
+
+¹ The rules feature turns on only when `DRIVE_FOLDER_ID` **and** one credential
+variable are set. Provide credentials **one** way — `GOOGLE_CREDENTIALS_FILE`
+**or** `GOOGLE_CREDENTIALS_JSON` (the latter wins if both are present). With none
+set, dice still work and the rules commands explain that Drive isn't configured.
+
+**Notes.** `DISCORD_TOKEN` is the only hard requirement — treat it like a
+password and **rotate** (reset in the portal) if it leaks. Guild command updates
+are instant; global ones lag ~1h — so dev points at a test guild, prod goes
+global. The two credential options are the *same key, two delivery methods*: a
+file for local disks, inline JSON for hosts that only expose env vars.
+
+## Running & managing
+
+```bash
+./run.sh             # foreground via the project venv; Ctrl-C stops
+```
+
+A `lorehound` shell command (in `lorehound.zsh`, sourced from `~/.zshrc`) manages
+it as a background process from anywhere:
+
+```bash
+lorehound start      # run detached, logging to bot.log  (default verb)
+lorehound stop       # stop it
+lorehound restart    # stop + start — use after code/config changes
+lorehound status     # running/stopped + pid
+lorehound logs       # live-tail bot.log
+lorehound run        # foreground instead
+```
+
+**Config/code changes take effect on `restart`.**
+
+## How it works
+
+- **Extraction is cached; the index is rebuilt each start.** PDF→Markdown+tables
+  extraction is expensive, so each doc is cached to `cache/<fileid>.json`, keyed
+  by Drive file id + last-modified time + extractor version. A doc re-extracts
+  only when it **changes on Drive** or the **extractor version** bumps. The BM25
+  index is cheap and rebuilt in memory every start (not persisted). So a normal
+  restart is seconds; a first run (or extractor-version change) re-extracts the
+  whole library and takes a few minutes.
+- **Output is Components V2 + ANSI.** Responses are bot-composed cards (containers
+  / sections / separators) with ANSI-colored, aligned text — not embeds. See
+  `lorehound/ui.py`.
+- **Tables** are detected in an isolated subprocess (PyMuPDF `find_tables`,
+  `pdf_tables.py`) and rendered for Discord (`tables.py`). PDF text uses PyMuPDF's
+  ML-free path (font-histogram headings + multi-column order) — headings drive
+  section-aware chunking, no heavy layout model.
 
 ## Security
 
-Secrets never live in code — only in `.env` (gitignored) locally, or in your
-host's env-var settings in production.
+Secrets live only in `.env` (gitignored) locally, or host env vars in prod.
 
-- **`.env` holds all tokens.** It is gitignored; only `.env.example` (with no
-  real values) is committed.
-- **Pre-commit guard.** A hook in `.githooks/` refuses to commit any secret file
-  or embedded token/private key — defense-in-depth on top of `.gitignore`.
-  Enable it per clone (already set here) with:
-  `git config core.hooksPath .githooks`
-- **Lock down permissions** on anything holding a real secret:
-  `chmod 600 .env service_account.json`
-- **Least privilege.** The Google service account uses read-only Drive scope and
-  the Discord bot requests no privileged intents.
-- **If a secret ever leaks, rotate it** — that's the only real fix. Reset the
-  Discord token in the Developer Portal, and delete/recreate the service-account
-  key in Google Cloud. (Deleting the file alone doesn't invalidate a leaked key.)
+- **`.env` holds all tokens.** Only `.env.example` (no real values) is committed.
+- **Pre-commit guard.** A `.githooks/` hook refuses to commit secret files or
+  embedded tokens/keys. Enable per clone: `git config core.hooksPath .githooks`.
+- **`chmod 600 .env service_account.json`** on anything holding a secret.
+- **Least privilege:** read-only Drive scope, no privileged Discord intents.
+- **If a secret leaks, rotate it** — reset the Discord token; delete/recreate the
+  service-account key. (Deleting the file alone doesn't invalidate a leaked key.)
 
 ## Hosting (free tiers)
 
-The bot is a long-running process (not a web service), so pick a host that
-supports background workers:
+A long-running process, not a web service — pick a host with background workers.
 
-- **Railway / Render** — set the start command to `python bot.py`, add the env
-  vars from `.env`, and (on Render) choose a **Background Worker**.
-- **Fly.io** — works well; the JSON-in-env-var credential option is handy here.
-- For Drive creds on these hosts, use `GOOGLE_CREDENTIALS_JSON` (paste the whole
-  key JSON as one env var) instead of committing a file.
+- **Railway / Render** — start command `python bot.py`, add the `.env` vars, and
+  on Render choose a **Background Worker**.
+- **Fly.io** — works well; the inline-JSON credential option is handy here.
+- For Drive creds on hosts, prefer `GOOGLE_CREDENTIALS_JSON` over committing a file.
 
-Pin the host's Python to 3.12 or 3.13 for the smoothest dependency install.
-
----
-
-## Project layout
+## Layout
 
 ```
-bot.py                     # entry point: builds bot, loads cogs, runs
 lorehound/
-  config.py                # env-var configuration
-  dice.py                  # generic dice engine (pure, unit-tested)
-  twilight.py              # Twilight 2000 mechanics
-  drive_client.py          # Google Drive: list / download / extract text
-  search_index.py          # tiny built-in BM25 search (no numpy)
-  rules.py                 # ties Drive + index together
-  cogs/
-    dice_cog.py            # /roll /d /t2k /ammo
-    rules_cog.py           # /rule /rules_sync /sources
-tests/
-  test_dice.py             # run: python -m pytest
+├── bot.py                  # entry point: build bot, load cogs, run
+├── run.sh                  # start the bot via the project venv
+├── lorehound.zsh           # `lorehound` shell command (source from ~/.zshrc)
+├── .env.example            # config template — copy to .env and fill in
+├── lorehound/
+│   ├── config.py           # env-var configuration (.env locally)
+│   ├── dice.py             # generic dice engine (pure, unit-tested)
+│   ├── twilight.py         # Twilight 2000 mechanics
+│   ├── drive_client.py     # Drive: list / download / extract (PDF→Markdown + tables)
+│   ├── pdf_tables.py       # isolated-subprocess table detection (PyMuPDF find_tables)
+│   ├── tables.py           # render recovered tables for Discord
+│   ├── search_index.py     # tiny built-in BM25 search (no numpy / vector DB)
+│   ├── ui.py               # Components V2 + ANSI output toolkit
+│   ├── rules.py            # ties Drive + extraction + index together
+│   └── cogs/
+│       ├── dice_cog.py     # /roll /d /t2k
+│       ├── rules_cog.py    # /rule /item /transport /table /sources /rules_sync
+│       └── meta_cog.py     # /help + @mention intro
+└── tests/
+    ├── test_dice.py        # dice + Twilight mechanics
+    └── test_rules.py       # chunking, tables, heading boost
 ```
 
-## Running the tests
+## Tests
 
 ```bash
-python -m pytest          # or: python -m unittest
+python -m unittest        # or: python -m pytest (if installed)
 ```
 
-The dice/Twilight tests need no Discord token or network access.
+No Discord token or network access required.

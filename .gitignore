@@ -30,3 +30,7 @@ assets/alternates/
 
 # Table-extraction audit output (dev tool: scripts/table_audit.py)
 table-audit/
+
+# Bot runtime (managed by the `lorehound` shell function)
+bot.log
+.bot.pid
