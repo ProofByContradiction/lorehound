@@ -1,0 +1,5 @@
+# Development & CI tooling — NOT required at runtime (keeps the bot deploy light).
+# Install with:  python -m pip install -r requirements-dev.txt
+
+# Dependency vulnerability scanner (used by scripts/security_audit.sh).
+pip-audit>=2.7

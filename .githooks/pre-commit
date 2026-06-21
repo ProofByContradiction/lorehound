@@ -35,4 +35,15 @@ if [ -n "$offenders" ]; then
     echo "Nothing was committed. False positive? Re-run with: git commit --no-verify"
     exit 1
 fi
+
+# --- Dependency security audit (defense-in-depth; runs on every commit) ------
+# Checks for dependency conflicts + known CVEs. Skip a one-off with:
+#   SKIP_DEP_AUDIT=1 git commit …        (or bypass everything with --no-verify)
+if [ "${SKIP_DEP_AUDIT:-0}" != "1" ]; then
+    root=$(git rev-parse --show-toplevel)
+    if [ -x "$root/scripts/security_audit.sh" ]; then
+        "$root/scripts/security_audit.sh" || exit 1
+    fi
+fi
+
 exit 0
