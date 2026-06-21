@@ -23,6 +23,10 @@ class Config:
     # Optional: sync slash commands to this guild for instant updates while
     # developing. Leave unset to register commands globally (can take ~1 hour).
     guild_id: int | None
+    # Opt-in: register commands as a user-installable app so they work in DMs and
+    # private group chats, not just servers. Requires "User Install" to be enabled
+    # in the Discord Developer Portal. Off by default (keeps guild-only behavior).
+    user_install: bool
     # Google Drive (optional until you set up credentials).
     drive_folder_id: str | None
     google_credentials_file: str | None
@@ -47,9 +51,17 @@ class Config:
         guild_raw = os.environ.get("DISCORD_GUILD_ID", "").strip()
         guild_id = int(guild_raw) if guild_raw.isdigit() else None
 
+        user_install = os.environ.get("LOREHOUND_USER_INSTALL", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
         return cls(
             discord_token=token,
             guild_id=guild_id,
+            user_install=user_install,
             drive_folder_id=os.environ.get("DRIVE_FOLDER_ID", "").strip() or None,
             google_credentials_file=os.environ.get(
                 "GOOGLE_CREDENTIALS_FILE", ""
