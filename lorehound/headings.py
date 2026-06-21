@@ -42,6 +42,10 @@ def _is_bold(span: dict) -> bool:
     return bool(span["flags"] & _BOLD_FLAG) or "bold" in span.get("font", "").lower()
 
 
+def _toks(s: str) -> set:
+    return {t for t in re.sub(r"[^a-z0-9 ]", " ", s.lower()).split() if len(t) > 2}
+
+
 def _caps_ratio(text: str) -> float:
     letters = [c for c in text if c.isalpha()]
     if not letters:
@@ -170,3 +174,32 @@ def demote_noise(md: str, *, max_repeats: int = _MAX_REPEATS) -> str:
                 continue
         out.append(line)
     return "\n".join(out)
+
+
+def inject_toc_headings(doc, page_texts: list[str]) -> list[str]:
+    """Prepend each ToC chapter heading to the top of its page chunk.
+
+    Publisher chapter titles are often large text laid over images on chapter
+    openers, which ``to_markdown`` drops before heading detection sees them — so
+    font/style heuristics (and even span-matching ``TocHeaders``) miss them. The
+    ToC has the title + page directly, so we inject it, skipping pages that
+    already carry a matching heading near the top.  ``page_texts`` is the list of
+    per-page Markdown (index = ToC page number − 1).
+    """
+    toc = doc.get_toc() if hasattr(doc, "get_toc") else []
+    out = list(page_texts)
+    for level, title, page in toc:
+        idx = page - 1
+        title = title.strip()
+        if not (0 <= idx < len(out)) or not title:
+            continue
+        want = _toks(title)
+        top = [
+            _MARKUP_RE.sub("", l).strip()
+            for l in out[idx].splitlines()[:6]
+            if l.lstrip().startswith("#")
+        ]
+        if want and any(len(want & _toks(h)) / len(want) >= 0.6 for h in top):
+            continue  # a matching heading is already there
+        out[idx] = f"{'#' * min(level, 6)} {title}\n\n{out[idx]}"
+    return out
