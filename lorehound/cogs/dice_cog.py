@@ -1,8 +1,9 @@
 """Slash commands for rolling dice (generic + Twilight 2000).
 
-Output style: "friendly & visual" — a who-rolled header with the roller's
-avatar, real Unicode pip-faces for d6, a separator rule, and a prominent total
-with ✨ (a max roll showed) / 💥 (a 1 showed) flair.
+Output style: Components V2 *cards* (see ``lorehound/ui.py``) with the roller's
+avatar, an ANSI-colored breakdown of the dice (green = max roll / success,
+red = a 1), and a prominent total or verdict. Cards are public; only the rules
+lookups are private.
 """
 
 from __future__ import annotations
@@ -11,76 +12,125 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..dice import DiceError, STANDARD_DICE, evaluate, roll_dice
+from ..dice import STANDARD_DICE, DiceError, evaluate, roll_dice
 from ..twilight import TwilightError, skill_check
+from .. import ui
+from ..ui import Ansi, ansi_block, paint
 
-# Unicode pip faces for d6 (used in monospace code-block tables, e.g. /t2k).
-D6_FACES = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
-# Big, colourful keycap emoji for d6 in rich embeds (/roll, /d, /ammo).
-KEYCAPS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
-RULE = "─" * 16
-
-
-def _die_token(face: int, sides: int) -> str:
-    """One die's value: a big keycap emoji for d6, a boxed number otherwise."""
-    if sides == 6 and 1 <= face <= 6:
-        return KEYCAPS[face]
-    return f"`{face}`"
+BLURPLE = discord.Colour.blurple()
+GREEN = discord.Colour.green()
+RED = discord.Colour.red()
 
 
-def _cb_die(value: int, sides: int) -> str:
-    """Code-block-safe die token: pip-face + number for d6, plain number else."""
-    if sides == 6 and 1 <= value <= 6:
-        return f"{D6_FACES[value]} {value}"
-    return str(value)
+def _face(value: int, sides: int) -> str:
+    """A die value for an ANSI block: bold-green on a max roll, bold-red on a 1."""
+    v = abs(value)
+    cell = str(v)
+    if v == sides:
+        return paint(cell, Ansi.BOLD, Ansi.GREEN)
+    if v == 1:
+        return paint(cell, Ansi.BOLD, Ansi.RED)
+    return cell
 
 
-def _t2k_table(rows: list[tuple[str, str, str, str, str]]) -> str:
-    """Aligned monospace table inside a code block. Columns:
-    DIE | LVL | TYPE | HITS | ROLLED.  ROLLED comes last so variable-width dice
-    faces never knock the earlier columns out of alignment."""
-    header = ("DIE", "LVL", "TYPE", "HITS", "ROLLED")
-
-    def row(die: str, lvl: str, typ: str, hits: str, rolled: str) -> str:
-        return f"{die:<10}{lvl:<4}{typ:<7}{hits:<6}{rolled}"
-
-    body = "\n".join(row(*r) for r in (header, *rows))
-    return f"```\n{body}\n```"
+def _heading(interaction: discord.Interaction, action: str) -> discord.ui.Item:
+    return ui.header(
+        f"### 🎲 **{interaction.user.display_name}** {action}",
+        icon_url=interaction.user.display_avatar.url,
+    )
 
 
-def _group_line(count: int, sides: int, rolls: list[int]) -> str:
-    """A line like `🎲 **2d6**   ⚂ 3   ⚄ 5` (handles subtracted groups)."""
-    subtracted = any(r < 0 for r in rolls)
-    tokens = "   ".join(_die_token(abs(r), sides) for r in rolls)
-    sign = "−" if subtracted else ""
-    return f"🎲 **{sign}{count}d{sides}**   {tokens}"
+# --- Generic roller card ----------------------------------------------------
 
 
-def _author(interaction: discord.Interaction, action: str) -> dict:
-    return {
-        "name": f"{interaction.user.display_name} {action}",
-        "icon_url": interaction.user.display_avatar.url,
-    }
-
-
-def _roll_embed(interaction, expression, groups, modifier, total) -> discord.Embed:
-    """Shared 'friendly & visual' embed for /roll and /d."""
+def _roll_card(interaction, expression, groups, modifier, total) -> discord.ui.LayoutView:
     crit = any(abs(r) == g.sides for g in groups for r in g.rolls)
     fumble = any(abs(r) == 1 for g in groups for r in g.rolls)
 
-    lines = [_group_line(g.count, g.sides, g.rolls) for g in groups]
+    lines = []
+    for g in groups:
+        sign = "−" if any(r < 0 for r in g.rolls) else ""
+        label = f"{sign}{g.count}d{g.sides}"
+        faces = "  ".join(_face(r, g.sides) for r in g.rolls)
+        lines.append(f"{label:<7} {faces}")
     if modifier:
-        lines.append(f"➕ **Modifier**   {modifier:+d}")
-    lines.append(RULE)
-    flair = ("✨ " if crit else "") + ("💥 " if fumble else "")
-    lines.append(f"## {flair}Total: {total}")
+        lines.append(f"{'mod':<7} {modifier:+d}")
 
-    embed = discord.Embed(
-        description="\n".join(lines),
-        color=discord.Color.green() if crit else discord.Color.blurple(),
+    flair = ("✨ " if crit else "") + ("💥 " if fumble else "")
+    accent = GREEN if crit else (RED if fumble else BLURPLE)
+    return ui.card(
+        _heading(interaction, f"rolled `{expression}`"),
+        ui.separator(),
+        ui.text(ansi_block("\n".join(lines))),
+        ui.separator(large=True),
+        ui.text(f"## {flair}Total: {total}"),
+        accent=accent,
     )
-    embed.set_author(**_author(interaction, f"rolled {expression}"))
-    return embed
+
+
+# --- Twilight 2000 card -----------------------------------------------------
+
+
+def _t2k_card(interaction, result, *, untrained: bool) -> discord.ui.LayoutView:
+    lines = [paint(f"{'DICE':<11}{'LVL':<5}{'TYPE':<7}{'ROLL':>4}  HITS", Ansi.GRAY)]
+    for d in result.dice:
+        roll = f"{d.value:>4}"
+        if d.value == 1:
+            roll = paint(roll, Ansi.BOLD, Ansi.RED)
+        elif d.successes:
+            roll = paint(roll, Ansi.BOLD, Ansi.GREEN)
+        hits = f"+{d.successes}" if d.successes else "—"
+        lines.append(
+            f"{d.label.capitalize():<11}{d.rating:<5}{('d' + str(d.sides)):<7}{roll}  {hits}"
+        )
+    if untrained:
+        lines.append(f"{'Skill':<11}{'F':<5}{'—':<7}{'—':>4}  —")
+    if result.ammo is not None:
+        faces = " ".join(_face(r, 6) for r in result.ammo.rolls)
+        ah = f"+{result.ammo_hits}" if result.ammo_hits else "—"
+        lines.append("")
+        lines.append(f"Ammo   {len(result.ammo.rolls)}×d6   {faces}   →  {ah}")
+
+    if result.succeeded:
+        n = result.total_successes
+        verdict = f"## ✅ Success — {n} success{'' if n == 1 else 'es'}"
+        accent = GREEN
+    else:
+        verdict = "## ❌ Failure — 0 successes"
+        accent = RED
+
+    notes: list[str] = []
+    if result.succeeded and result.ammo_hits:
+        notes.append(f"_{result.successes} from the check + {result.ammo_hits} from ammo._")
+    if result.ammo is not None:
+        notes.append(
+            f"🔫 **{result.rounds_spent}** rounds spent  ·  _ammo sum "
+            f"{result.ammo.total} + 1_"
+        )
+        if result.jam_ones:
+            line = (
+                f"🔧 **{result.jam_ones}× ⚀** — pushing this roll would cost "
+                f"−{result.jam_ones} weapon reliability"
+            )
+            if result.jam_ones >= 2:
+                line += " **and jam the weapon** 💥"
+            notes.append(line)
+        if not result.succeeded and result.ammo_hits:
+            notes.append("_Attack missed — ammo 6s don't add hits on a miss._")
+    elif result.can_push_warn:
+        notes.append(
+            "_A 1 is showing — careful if you push (it can hurt you or the gear used)._"
+        )
+
+    return ui.card(
+        _heading(interaction, "rolled a **Twilight 2000** check"),
+        ui.separator(),
+        ui.text(ansi_block("\n".join(lines))),
+        ui.separator(),
+        ui.text(verdict),
+        ui.text("\n".join(notes)) if notes else None,
+        accent=accent,
+    )
 
 
 class DiceCog(commands.Cog):
@@ -99,12 +149,12 @@ class DiceCog(commands.Cog):
         except DiceError as exc:
             await interaction.response.send_message(f"⚠️ {exc}", ephemeral=True)
             return
-        embed = _roll_embed(
+        view = _roll_card(
             interaction, result.expression, result.groups, result.modifier, result.total
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(view=view)
 
-    # --- Quick dice (d6..d12 and friends) -----------------------------------
+    # --- Quick dice ---------------------------------------------------------
 
     @app_commands.command(
         name="d", description="Quick-roll N dice of one type, e.g. /d sides:6 count:3"
@@ -120,10 +170,8 @@ class DiceCog(commands.Cog):
         except DiceError as exc:
             await interaction.response.send_message(f"⚠️ {exc}", ephemeral=True)
             return
-        embed = _roll_embed(
-            interaction, f"{count}d{sides}", [group], 0, group.subtotal
-        )
-        await interaction.response.send_message(embed=embed)
+        view = _roll_card(interaction, f"{count}d{sides}", [group], 0, group.subtotal)
+        await interaction.response.send_message(view=view)
 
     @quick.autocomplete("sides")
     async def _sides_ac(
@@ -158,71 +206,9 @@ class DiceCog(commands.Cog):
         except TwilightError as exc:
             await interaction.response.send_message(f"⚠️ {exc}", ephemeral=True)
             return
-
-        rows: list[tuple[str, str, str, str, str]] = []
-        for d in result.dice:
-            hits = f"+{d.successes}" if d.successes else "—"
-            rows.append(
-                (
-                    d.label.capitalize(),
-                    d.rating,
-                    f"d{d.sides}",
-                    hits,
-                    _cb_die(d.value, d.sides),
-                )
-            )
-        # Show the skill slot even when untrained (level F = no die rolled).
-        if not skill or not str(skill).strip():
-            rows.append(("Skill", "F", "—", "—", "untrained"))
-
-        # Optional ammo dice, rolled alongside the attack (each 6 = extra hit).
-        if result.ammo is not None:
-            faces = " ".join(
-                f"{D6_FACES[r]}✨" if r == 6 else D6_FACES[r] for r in result.ammo.rolls
-            )
-            hits = f"+{result.ammo_hits}" if result.ammo_hits else "—"
-            rows.append(("Ammo", "—", f"{len(result.ammo.rolls)}×d6", hits, faces))
-
-        if result.succeeded:
-            total = result.total_successes
-            plural = "" if total == 1 else "es"
-            verdict = f"✅ **Success — {total} success{plural}**"
-            if result.ammo_hits:
-                verdict += f"  ·  {result.successes} check + {result.ammo_hits} ammo"
-            color = discord.Color.green()
-        else:
-            verdict = "❌ **Failure — 0 successes**"
-            color = discord.Color.red()
-
-        desc = f"{_t2k_table(rows)}\n{verdict}"
-        footer = None
-        if result.ammo is not None:
-            desc += (
-                f"\n🔫 **{result.rounds_spent}** rounds spent "
-                f"_(ammo sum {result.ammo.total} + 1)_"
-            )
-            # 1s are the jam symbol: on a push each costs 1 reliability, 2+ jams.
-            if result.jam_ones:
-                line = (
-                    f"🔧 **{result.jam_ones}× ⚀** — pushing this roll would cost "
-                    f"−{result.jam_ones} weapon reliability"
-                )
-                if result.jam_ones >= 2:
-                    line += " **and jam the weapon** 💥"
-                desc += f"\n{line}"
-            if not result.succeeded and result.ammo_hits:
-                footer = "Attack missed — ammo 6s don't add hits on a miss."
-        elif result.can_push_warn:
-            footer = (
-                "A 1 is showing — careful if you push (it can damage you or the "
-                "gear you used)."
-            )
-
-        embed = discord.Embed(description=desc, color=color)
-        embed.set_author(**_author(interaction, "rolled a Twilight 2000 check"))
-        if footer:
-            embed.set_footer(text=footer)
-        await interaction.response.send_message(embed=embed)
+        untrained = not skill or not str(skill).strip()
+        view = _t2k_card(interaction, result, untrained=untrained)
+        await interaction.response.send_message(view=view)
 
     # Ammo dice are never rolled on their own — they're always part of a ranged
     # attack — so they live on /t2k via the `ammo` option, not a separate command.

@@ -1,12 +1,14 @@
 """Slash commands for searching the library pulled from Google Drive.
 
-Three lookups, each scoped to a game (and optionally one book), each showing a
+Library commands, each scoped to a game (and optionally one book), each showing a
 pickable list of matches you select to read in full:
-  /rule    — how to play: character stats, abilities, specialties, procedures
-  /item    — gear, weapons, equipment
-  /vehicle — vehicles, ships, and their parts
+  /rule      — how to play: character stats, abilities, specialties, procedures
+  /item      — gear, weapons, equipment
+  /transport — vehicles, ships, craft, mounts & their parts
+  /table     — find and print a rules table
 
-All responses are private (ephemeral); only dice rolls and @mention are public.
+All responses are private (ephemeral) Components V2 cards; a "Show in channel"
+button reposts the picked result publicly. Only dice rolls and @mention are public.
 """
 
 from __future__ import annotations
@@ -17,9 +19,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .. import ui
 from ..rules import RulesService
 from ..search_index import SearchHit
 from ..tables import render_table
+
+TEAL = discord.Colour.dark_teal()
+GREEN = discord.Colour.green()
 
 _NOT_CONFIGURED = (
     "📚 Google Drive isn't connected yet. Add your `DRIVE_FOLDER_ID` and Google "
@@ -44,7 +50,7 @@ def _resolve_game(rules: RulesService, source: str) -> str | None:
     return None
 
 
-# --- Autocomplete (module-level so all three commands can share them) -------
+# --- Autocomplete (module-level so all commands can share them) -------------
 
 async def _game_autocomplete(
     interaction: discord.Interaction, current: str
@@ -103,14 +109,19 @@ async def _table_autocomplete(
     return out
 
 
-# --- Select-to-read UI ------------------------------------------------------
+# --- Select-to-read card ----------------------------------------------------
 
-def _detail_embed(hit: SearchHit, query: str) -> discord.Embed:
+
+def _where(chunk) -> str:
+    return chunk.source + (f" · {chunk.locator}" if chunk.locator else "")
+
+
+def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
+    """The body blocks for one result — a title, the text or rendered table, and
+    a source/page footnote. Reused by the inline detail and the public repost."""
     c = hit.chunk
     emoji, _ = _META.get(c.category, ("📖", ""))
-    where = f"{c.source}" + (f" · {c.locator}" if c.locator else "")
-    title = f"{emoji} {(c.section or query)[:250]}"
-
+    title = ui.text(f"### {emoji} {(c.section or query)[:250]}")
     if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
         rendered, wide = render_table(c.rows)
         note = (
@@ -118,33 +129,38 @@ def _detail_embed(hit: SearchHit, query: str) -> discord.Embed:
             if wide
             else " — verify against the book for rulings."
         )
-        embed = discord.Embed(
-            title=title, description=rendered[:4096], color=discord.Color.dark_teal()
-        )
-        embed.set_footer(text=where + note)
-        return embed
+        return [title, ui.separator(), ui.text(rendered[:4000]),
+                ui.text(f"-# {_where(c)}{note}")]
+    body = " ".join(c.text.split())[:4000]
+    return [title, ui.separator(), ui.text(body),
+            ui.text(f"-# {_where(c)} — verify against the book for rulings.")]
 
-    embed = discord.Embed(
-        title=title,
-        description=" ".join(c.text.split())[:4096],
-        color=discord.Color.dark_teal(),
+
+def _public_detail_card(hit: SearchHit, query: str, user) -> discord.ui.LayoutView:
+    """A non-interactive card reposting one result to the whole channel."""
+    return ui.card(
+        ui.text(f"-# 📖 Shared by {user.display_name}"),
+        *_detail_items(hit, query),
+        accent=TEAL,
     )
-    embed.set_footer(text=where + " — verify against the book for rulings.")
-    return embed
 
 
 class ResultSelect(discord.ui.Select):
-    def __init__(self, hits: list[SearchHit], query: str) -> None:
+    def __init__(self, hits, query, title, subtitle, selected):
         self.hits = hits
         self.query = query
+        self.title = title
+        self.subtitle = subtitle
         options = []
         for i, h in enumerate(hits):
             c = h.chunk
             label = (c.section or c.source).strip() or f"Result {i + 1}"
-            desc = c.source + (f" · {c.locator}" if c.locator else "")
             options.append(
                 discord.SelectOption(
-                    label=label[:100], description=desc[:100], value=str(i)
+                    label=label[:100],
+                    description=_where(c)[:100],
+                    value=str(i),
+                    default=(selected == i),
                 )
             )
         super().__init__(
@@ -155,36 +171,37 @@ class ResultSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        hit = self.hits[int(self.values[0])]
-        self.view.selected = hit  # remember the choice for the "Show" button
-        await interaction.response.edit_message(
-            embed=_detail_embed(hit, self.query), view=self.view
+        idx = int(self.values[0])
+        view = ResultsView(
+            self.hits, self.query, title=self.title, subtitle=self.subtitle, selected=idx
         )
+        await interaction.response.edit_message(view=view)
 
 
 class ShowInChannelButton(discord.ui.Button):
-    """Re-post the currently-selected result publicly. Lookups are private by
-    default; this shares the one you picked with the whole channel."""
+    """Repost the currently-selected result publicly. Lookups are private by
+    default; this shares the picked one with the whole channel."""
 
-    def __init__(self) -> None:
+    def __init__(self, selected_hit: SearchHit | None, query: str) -> None:
         super().__init__(
-            label="Show in channel", emoji="📢", style=discord.ButtonStyle.primary
+            label="Show in channel",
+            emoji="📢",
+            style=discord.ButtonStyle.primary,
+            disabled=selected_hit is None,
         )
+        self.selected_hit = selected_hit
+        self.query = query
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        view: ResultsView = self.view  # type: ignore[assignment]
-        if view.selected is None:
+        if self.selected_hit is None:
             await interaction.response.send_message(
                 "Pick a result from the menu first, then press **Show in channel**.",
                 ephemeral=True,
             )
             return
-        embed = _detail_embed(view.selected, view.query)
         try:
             await interaction.response.send_message(
-                content=f"📖 Shared by {interaction.user.mention}",
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions.none(),
+                view=_public_detail_card(self.selected_hit, self.query, interaction.user)
             )
         except discord.HTTPException as exc:
             await interaction.response.send_message(
@@ -192,13 +209,46 @@ class ShowInChannelButton(discord.ui.Button):
             )
 
 
-class ResultsView(discord.ui.View):
-    def __init__(self, hits: list[SearchHit], query: str) -> None:
+class ResultsView(discord.ui.LayoutView):
+    """The ephemeral search card: a ranked list (or the picked detail) plus a
+    select to switch results and a button to share the picked one."""
+
+    def __init__(
+        self,
+        hits: list[SearchHit],
+        query: str,
+        *,
+        title: str,
+        subtitle: str,
+        selected: int | None = None,
+    ) -> None:
         super().__init__(timeout=180)
+        self.hits = hits
         self.query = query
-        self.selected: SearchHit | None = None
-        self.add_item(ResultSelect(hits, query))
-        self.add_item(ShowInChannelButton())
+        self.selected = selected
+        container = discord.ui.Container(accent_colour=TEAL)
+        if selected is None:
+            container.add_item(ui.text(f"### {title}"))
+            container.add_item(ui.text(subtitle))
+            container.add_item(ui.separator())
+            lines = []
+            for i, h in enumerate(hits, 1):
+                c = h.chunk
+                lines.append(f"**{i}.** {(c.section or c.source)[:240]}\n-# {_where(c)}")
+            container.add_item(ui.text("\n".join(lines)[:4000]))
+        else:
+            for item in _detail_items(hits[selected], query):
+                container.add_item(item)
+        container.add_item(ui.separator())
+        select_row = discord.ui.ActionRow()
+        select_row.add_item(ResultSelect(hits, query, title, subtitle, selected))
+        container.add_item(select_row)
+        button_row = discord.ui.ActionRow()
+        button_row.add_item(
+            ShowInChannelButton(hits[selected] if selected is not None else None, query)
+        )
+        container.add_item(button_row)
+        self.add_item(container)
 
 
 class RulesCog(commands.Cog):
@@ -262,24 +312,15 @@ class RulesCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
+        view = ResultsView(
+            hits,
+            query,
             title=f"{emoji} {label}: {query}",
-            description=f"in {scope} — **{len(hits)}** matches. Pick one to read:",
-            color=discord.Color.dark_teal(),
+            subtitle=f"in {scope} — **{len(hits)}** matches. Pick one to read:",
         )
-        for i, h in enumerate(hits, 1):
-            c = h.chunk
-            where = c.source + (f" · {c.locator}" if c.locator else "")
-            embed.add_field(
-                name=f"{i}. {(c.section or c.source)[:240]}",
-                value=where[:1024],
-                inline=False,
-            )
-        await interaction.response.send_message(
-            embed=embed, view=ResultsView(hits, query), ephemeral=True
-        )
+        await interaction.response.send_message(view=view, ephemeral=True)
 
-    # --- The three lookups --------------------------------------------------
+    # --- The lookups --------------------------------------------------------
 
     @app_commands.command(
         name="rule",
@@ -371,13 +412,15 @@ class RulesCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # Show the best match immediately; the select lets you switch among
-        # other matches, and the button shares it to the channel.
-        view = ResultsView(hits, name)
-        view.selected = hits[0]
-        await interaction.response.send_message(
-            embed=_detail_embed(hits[0], name), view=view, ephemeral=True
+        # Open straight on the best match; the select switches among the rest.
+        view = ResultsView(
+            hits,
+            name,
+            title=f"📊 Tables: {name}",
+            subtitle=f"in **{game}** — **{len(hits)}** matches.",
+            selected=0,
         )
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     # --- Library management -------------------------------------------------
 
@@ -397,21 +440,21 @@ class RulesCog(commands.Cog):
             return
 
         games: dict[str, list[str]] = summary["games"]
-        embed = discord.Embed(
-            title="✅ Library synced",
-            description=(
+        blocks = "\n\n".join(
+            f"**🎲 {game}** ({len(files)})\n" + "\n".join(f"- {f}" for f in files)
+            for game, files in games.items()
+        )
+        view = ui.card(
+            ui.text("### ✅ Library synced"),
+            ui.text(
                 f"Indexed **{summary['documents']}** book(s) across "
                 f"**{len(games)}** game(s) — **{summary['chunks']}** searchable chunks."
             ),
-            color=discord.Color.green(),
+            ui.separator(),
+            ui.text(blocks[:4000]),
+            accent=GREEN,
         )
-        for game, files in games.items():
-            embed.add_field(
-                name=f"🎲 {game} ({len(files)})",
-                value="\n".join(f"• {f}" for f in files)[:1024],
-                inline=False,
-            )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(view=view, ephemeral=True)
 
     @app_commands.command(
         name="sources", description="List the games and books available to search."
@@ -421,21 +464,23 @@ class RulesCog(commands.Cog):
             await interaction.response.send_message(_NOT_READY, ephemeral=True)
             return
         files_by_game = self.rules.index.files_by_game
-        lines = [
-            "Look things up with `/rule`, `/item`, or `/vehicle` "
-            "— `source:<game>` and optionally `book:`.\n",
-        ]
+        lines = []
         for game in self.rules.index.games:
             books = files_by_game[game]
             lines.append(f"- **🎲 {game}** ({len(books)} books)")
             lines.extend(f"  - {b}" for b in books)
-        embed = discord.Embed(
-            title="📚 Available sources",
-            description="\n".join(lines)[:4096],
-            color=discord.Color.dark_teal(),
+        view = ui.card(
+            ui.text("### 📚 Available sources"),
+            ui.text(
+                "Look things up with `/rule`, `/item`, `/transport`, or `/table` "
+                "— `source:<game>` and optionally `book:`."
+            ),
+            ui.separator(),
+            ui.text("\n".join(lines)[:4000]),
+            ui.text(f"-# {self.rules.index.chunk_count} searchable chunks"),
+            accent=TEAL,
         )
-        embed.set_footer(text=f"{self.rules.index.chunk_count} searchable chunks")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

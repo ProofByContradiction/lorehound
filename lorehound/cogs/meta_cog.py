@@ -1,4 +1,4 @@
-"""Meta commands: /help, and a professional auto-intro when Lorehound is @mentioned."""
+"""Meta commands: /help, and a friendly auto-intro when Lorehound is @mentioned."""
 
 from __future__ import annotations
 
@@ -6,52 +6,42 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from .. import ui
 
-def capabilities_embed(bot: commands.Bot) -> discord.Embed:
-    """A single source of truth for 'what can Lorehound do', reused by /help
-    and the @mention reply."""
-    embed = discord.Embed(
-        title="🐕 Lorehound — your tabletop RPG helper",
-        description=(
+
+def capabilities_card(bot: commands.Bot) -> discord.ui.LayoutView:
+    """A single source of truth for 'what can Lorehound do', reused by /help and
+    the @mention reply. A Components V2 card (see lorehound/ui.py)."""
+    icon = bot.user.display_avatar.url if bot.user is not None else None
+    return ui.card(
+        ui.header("# 🐕 Lorehound — your tabletop RPG helper", icon_url=icon),
+        ui.text(
             "I roll dice and search a **Rules Library** — the game books loaded "
             "into my index — so you can pull up rules, gear, and stats mid-session "
             "without digging through PDFs. I work across multiple systems; run "
-            "`/sources` to see which games and books are available right now. "
-            "Type `/` to browse every command, or use the ones below."
+            "`/sources` to see what's available. Type `/` to browse every command."
         ),
-        color=discord.Color.blurple(),
-    )
-    embed.add_field(
-        name="🎲 Dice",
-        value=(
+        ui.separator(),
+        ui.text(
+            "**🎲 Dice**\n"
             "`/roll dice:2d6+1` — roll any dice expression\n"
             "`/d sides:20 count:2` — quick-roll N dice of one type\n"
             "`/t2k attribute:B skill:C ammo:5` — Twilight 2000 check "
             "(add `ammo` dice for full-auto)"
         ),
-        inline=False,
-    )
-    embed.add_field(
-        name="📚 Rules Library (pick a result to read)",
-        value=(
-            "Search the loaded game books, then pick a result to read in full:\n"
+        ui.separator(),
+        ui.text(
+            "**📚 Rules Library** — search the loaded books, then pick a result to read:\n"
             "`/rule source:<game> query:<topic>` — how to play: stats, abilities, specialties\n"
             "`/item source:<game> query:<topic>` — gear, weapons, equipment\n"
             "`/transport source:<game> query:<topic>` — vehicles, ships, craft & parts\n"
-            "`/table source:<game> name:<table>` — print a rules table (by chapter)\n"
-            "`/sources` — list available games & books  ·  `/rules_sync` — re-index the library"
+            "`/table source:<game> name:<table>` — print a rules table\n"
+            "`/sources` — list games & books  ·  `/rules_sync` — re-index the library"
         ),
-        inline=False,
+        ui.separator(),
+        ui.text("-# `/help` shows this · you can also **@mention me** anytime"),
+        accent=discord.Colour.blurple(),
     )
-    embed.add_field(
-        name="ℹ️ Getting help",
-        value="`/help` shows this. You can also just **@mention me** anytime.",
-        inline=False,
-    )
-    if bot.user is not None:
-        embed.set_thumbnail(url=bot.user.display_avatar.url)
-    embed.set_footer(text="Lorehound · a general RPG helper")
-    return embed
 
 
 class MetaCog(commands.Cog):
@@ -61,7 +51,7 @@ class MetaCog(commands.Cog):
     @app_commands.command(name="help", description="Show what Lorehound can do.")
     async def help_cmd(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            embed=capabilities_embed(self.bot), ephemeral=True
+            view=capabilities_card(self.bot), ephemeral=True
         )
 
     @commands.Cog.listener()
@@ -73,7 +63,7 @@ class MetaCog(commands.Cog):
         if self.bot.user in message.mentions:
             try:
                 await message.reply(
-                    embed=capabilities_embed(self.bot), mention_author=False
+                    view=capabilities_card(self.bot), mention_author=False
                 )
             except discord.HTTPException:
                 pass
