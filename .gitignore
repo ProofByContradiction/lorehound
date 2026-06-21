@@ -24,3 +24,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# Experimental art variants — keep the chosen icon/banner, skip the bulk
+assets/alternates/
