@@ -6,11 +6,15 @@ google-api-python-client>=2.100
 google-auth>=2.20
 google-auth-httplib2>=0.2
 
-# PDF text extraction
-pypdf>=4.0
+# PDF text extraction — PyMuPDF + pymupdf4llm (Markdown with headings + multi-
+# column reading order; drives the heading-aware chunking). NOTE: 1.27+ pulls
+# pymupdf-layout -> onnxruntime + numpy (~100MB) for the ML heading/layout
+# detection our chunking relies on. Heavy for free hosting; slimming it with a
+# dependency-light heading detector is a tracked future task.
+pymupdf4llm==1.27.2.3
 
 # Local .env loading (no-op in production if absent)
 python-dotenv>=1.0
 
-# NOTE: search uses a tiny built-in BM25 (lorehound/search_index.py), so there
-# is intentionally no numpy/scikit dependency to keep hosting light.
+# NOTE: the search engine itself is a dependency-free BM25 (search_index.py).
+# The heavy footprint comes only from pymupdf4llm's PDF layout analysis (above).
