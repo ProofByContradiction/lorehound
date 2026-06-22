@@ -22,7 +22,7 @@ from discord.ext import commands
 from .. import ui
 from ..rules import RulesService
 from ..search_index import SearchHit
-from ..tables import render_table
+from ..tables import render_item, render_table
 
 TEAL = discord.Colour.dark_teal()
 GREEN = discord.Colour.green()
@@ -123,7 +123,12 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
     emoji, _ = _META.get(c.category, ("📖", ""))
     title = ui.text(f"### {emoji} {(c.section or query)[:250]}")
     if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
-        rendered, wide = render_table(c.rows)
+        # For gear lookups, pull just the matching item's row as a card; for rules
+        # tables (and ambiguous gear queries) show the whole table.
+        if c.category in ("items", "transport"):
+            rendered, wide = render_item(c.rows, query)
+        else:
+            rendered, wide = render_table(c.rows)
         note = (
             " — wide table; scroll sideways on mobile. Verify against the book."
             if wide

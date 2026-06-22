@@ -10,7 +10,10 @@ is an ``ansi`` code block so the header can be emphasized.
 
 from __future__ import annotations
 
+import re
 import textwrap
+
+_WORD = re.compile(r"[a-z0-9]+")
 
 _ESC = "\x1b"
 _HEAD = f"{_ESC}[1;36m"  # bold cyan header row
@@ -51,20 +54,29 @@ def _fit_widths(nat: list[int], budget: int) -> list[int]:
     return [min(n, best) for n in nat]
 
 
+def _toks(s: str) -> set:
+    return {t for t in _WORD.findall(s.lower()) if len(t) > 1}
+
+
+def _name_col(grid: list[list[str]]) -> int:
+    """Index of the column holding row names — the first column with wordy values
+    (avg length > 4); short leading code columns (a roll/index) come before it."""
+    ncols = len(grid[0]) if grid else 0
+    for j in range(ncols):
+        vals = [grid[r][j] for r in range(1, len(grid)) if j < len(grid[r]) and grid[r][j]]
+        if vals and sum(len(v) for v in vals) / len(vals) > 4:
+            return j
+    return 0
+
+
 def _render_vertical(grid: list[list[str]]) -> str:
-    """Render a wide table as one vertical record per row — ``**Label:** value``
+    """Render a (wide) table as one vertical record per row — ``**Label:** value``
     pairs that wrap to the screen, so nothing overflows on mobile. Markdown (not a
-    code block) so Discord reflows it to the viewport width."""
+    code block) so Discord reflows it to the viewport width. With a single data row
+    this is the single-item gear card."""
     header = grid[0]
     ncols = len(header)
-    # The "name" column: first column with wordy values; short leading code columns
-    # (a roll/index) fold into the record's bold lead line.
-    name_col = 0
-    for j in range(ncols):
-        vals = [grid[r][j] for r in range(1, len(grid)) if grid[r][j]]
-        if vals and sum(len(v) for v in vals) / len(vals) > 4:
-            name_col = j
-            break
+    name_col = _name_col(grid)  # short leading code cols fold into the bold lead line
     blocks = []
     for r in range(1, len(grid)):
         row = grid[r]
@@ -146,3 +158,35 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
 
     wide = ncols >= 6 or (sum(widths) + gap) > 58
     return "```ansi\n" + "\n".join(lines) + "\n```", wide
+
+
+def match_row(rows: list[list[str]], query: str) -> int | None:
+    """Index of the data row whose name clearly matches the query, else None — used
+    to pull a single item ("M82A1") out of a stat table as its own card."""
+    grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
+    qt = _toks(query)
+    if not qt or len(grid) < 2:
+        return None
+    nc = _name_col(grid)
+    best, score = None, 0.0
+    for r in range(1, len(grid)):
+        nt = _toks(grid[r][nc]) if nc < len(grid[r]) else set()
+        if not nt:
+            continue
+        s = len(qt & nt) / len(qt)  # fraction of query words found in the row name
+        if s > score:
+            best, score = r, s
+    return best if score >= 0.6 else None
+
+
+def render_item(rows: list[list[str]], query: str) -> tuple[str, bool]:
+    """Single-item card when the query names one row of the table; otherwise the
+    whole table. The card reuses the vertical record renderer for [header, row]."""
+    grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
+    r = match_row(grid, query)
+    if r is None:
+        return render_table(rows)
+    ncols = max(len(grid[0]), len(grid[r]))
+    header = grid[0] + [""] * (ncols - len(grid[0]))
+    row = grid[r] + [""] * (ncols - len(grid[r]))
+    return _render_vertical([header, row]), False

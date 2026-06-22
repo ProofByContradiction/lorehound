@@ -72,7 +72,7 @@ def _roll_card(interaction, expression, groups, modifier, total) -> discord.ui.L
 
 
 def _t2k_card(interaction, result, *, untrained: bool) -> discord.ui.LayoutView:
-    lines = [paint(f"{'DICE':<11}{'LVL':<5}{'TYPE':<7}{'ROLL':>4}  HITS", Ansi.GRAY)]
+    lines = [paint(f"{'DICE':<11}{'LVL':<5}{'TYPE':<7}{'ROLL':>4}  HITS", Ansi.BOLD, Ansi.CYAN)]
     for d in result.dice:
         roll = f"{d.value:>4}"
         if d.value == 1:
