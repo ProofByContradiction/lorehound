@@ -76,19 +76,34 @@ def _render_vertical(grid: list[list[str]]) -> str:
     this is the single-item gear card."""
     header = grid[0]
     ncols = len(header)
-    name_col = _name_col(grid)  # short leading code cols fold into the bold lead line
+    name_col = _name_col(grid)
     blocks = []
     for r in range(1, len(grid)):
         row = grid[r]
-        lead = " · ".join(c for c in row[: name_col + 1] if c) or "—"
-        fields = [
+        # Leading short "code" columns (e.g. a D10 roll) become a labeled lead line
+        # ("D10 6"); the name column + the rest go in the body ("everything else").
+        codes = [
+            (f"{header[j]} {row[j]}".strip() if header[j] else row[j])
+            for j in range(name_col)
+            if row[j]
+        ]
+        body = []
+        name = row[name_col] if name_col < len(row) else ""
+        if name:
+            body.append(f"**{name}**")
+        body += [
             f"**{header[j]}:** {row[j]}" if header[j] else row[j]
             for j in range(name_col + 1, ncols)
             if row[j]
         ]
-        block = f"**{lead}**"
-        if fields:
-            block += "\n" + "  ·  ".join(fields)
+        if codes:  # roll/index table: dice header+number leads, everything else below
+            block = "**" + " · ".join(codes) + "**"
+            if body:
+                block += "\n" + "  ·  ".join(body)
+        else:  # name itself is the lead (e.g. a weapon/gear card)
+            block = body[0] if body else "**—**"
+            if body[1:]:
+                block += "\n" + "  ·  ".join(body[1:])
         blocks.append(block)
     return "\n\n".join(blocks)
 
