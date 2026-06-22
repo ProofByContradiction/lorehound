@@ -25,6 +25,7 @@ Slash commands (`/help` is authoritative):
 /roll dice:2d6+1                    # roll any notation: d20, 3d8-2, 2d6 + 1d8   · public
 /d sides:20 count:2                 # quick-roll N dice of one type, d4–d100     · public
 /t2k attribute:B skill:C ammo:5     # Twilight 2000 check: attribute+skill+ammo  · public
+/lookup source:<game> query:<topic> # search EVERYTHING, each result badged by type
 /rule source:<game> query:<topic>   # how to play: stats, abilities, specialties
 /item source:<game> query:<topic>   # gear, weapons, equipment
 /transport source:<game> query:…    # vehicles, ships, craft, mounts & parts
@@ -194,7 +195,7 @@ lorehound/
 │   ├── rules.py            # ties Drive + extraction + index together
 │   └── cogs/
 │       ├── dice_cog.py     # /roll /d /t2k
-│       ├── rules_cog.py    # /rule /item /transport /table /sources /reindex
+│       ├── rules_cog.py    # /lookup /rule /item /transport /table /sources /reindex
 │       └── meta_cog.py     # /help + @mention intro
 ├── scripts/
 │   └── retrieval_eval.py   # gold-query retrieval regression eval (local; needs the library)

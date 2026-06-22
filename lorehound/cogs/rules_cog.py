@@ -39,7 +39,16 @@ _META = {
     "items": ("🎒", "Items"),
     "transport": ("🚙", "Transport"),
     "tables": ("📊", "Tables"),
+    "card": ("🪖", "Careers"),
 }
+# Categories /lookup searches — everything players care about. "reference" (the
+# book's alphabetical index / page-footer fragments) is clutter, so it's excluded.
+_LOOKUP_SKIP = {"reference"}
+
+
+def _badge(category: str) -> str:
+    """The type emoji for a result category (used by /lookup's mixed list)."""
+    return _META.get(category, ("📖", ""))[0]
 
 
 def _resolve_game(rules: RulesService, source: str) -> str | None:
@@ -151,7 +160,7 @@ def _public_detail_card(hit: SearchHit, query: str, user) -> discord.ui.LayoutVi
 
 
 class ResultSelect(discord.ui.Select):
-    def __init__(self, hits, query, title, subtitle, selected):
+    def __init__(self, hits, query, title, subtitle, selected, badges=False):
         self.hits = hits
         self.query = query
         self.title = title
@@ -166,6 +175,7 @@ class ResultSelect(discord.ui.Select):
                     description=_where(c)[:100],
                     value=str(i),
                     default=(selected == i),
+                    emoji=_badge(c.category) if badges else None,
                 )
             )
         super().__init__(
@@ -226,11 +236,13 @@ class ResultsView(discord.ui.LayoutView):
         title: str,
         subtitle: str,
         selected: int | None = None,
+        badges: bool = False,
     ) -> None:
         super().__init__(timeout=180)
         self.hits = hits
         self.query = query
         self.selected = selected
+        self.badges = badges
         container = discord.ui.Container(accent_colour=TEAL)
         if selected is None:
             container.add_item(ui.text(f"### {title}"))
@@ -239,7 +251,9 @@ class ResultsView(discord.ui.LayoutView):
             lines = []
             for i, h in enumerate(hits, 1):
                 c = h.chunk
-                lines.append(f"**{i}.** {(c.section or c.source)[:240]}\n-# {_where(c)}")
+                # In a mixed (/lookup) list, badge each line with its type emoji.
+                prefix = f"{_badge(c.category)} " if badges else ""
+                lines.append(f"**{i}.** {prefix}{(c.section or c.source)[:240]}\n-# {_where(c)}")
             container.add_item(ui.text("\n".join(lines)[:4000]))
         else:
             for item in _detail_items(hits[selected], query):
@@ -248,7 +262,7 @@ class ResultsView(discord.ui.LayoutView):
         row = discord.ui.ActionRow()
         if selected is None:
             # List view: a dropdown to pick a result.
-            row.add_item(ResultSelect(hits, query, title, subtitle, selected))
+            row.add_item(ResultSelect(hits, query, title, subtitle, selected, badges=badges))
         else:
             # Detail view: the dropdown is gone — offer to share the picked result.
             row.add_item(ShowInChannelButton(hits[selected], query))
@@ -271,11 +285,13 @@ class RulesCog(commands.Cog):
     async def _lookup(
         self,
         interaction: discord.Interaction,
-        category: str,
+        category: str | None,
         source: str,
         query: str,
         book: str | None,
     ) -> None:
+        """Shared search flow. ``category=None`` is the unified /lookup: it searches
+        every category (badged by type), skipping the reference index."""
         if self.rules.drive is None:
             await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
             return
@@ -305,10 +321,17 @@ class RulesCog(commands.Cog):
                 )
                 return
 
-        hits = self.rules.search(
-            query, game=game, book=chosen_book, category=category, top_k=8
-        )
-        emoji, label = _META[category]
+        if category is None:
+            # Unified search: over-fetch, drop the reference index, badge by type.
+            hits = self.rules.search(query, game=game, book=chosen_book, top_k=12)
+            hits = [h for h in hits if h.chunk.category not in _LOOKUP_SKIP][:8]
+            emoji, label, badges = "🔎", "Lookup", True
+        else:
+            hits = self.rules.search(
+                query, game=game, book=chosen_book, category=category, top_k=8
+            )
+            emoji, label = _META[category]
+            badges = False
         scope = f"**{game}**" + (f" › **{chosen_book}**" if chosen_book else "")
         if not hits:
             await interaction.response.send_message(
@@ -322,10 +345,30 @@ class RulesCog(commands.Cog):
             query,
             title=f"{emoji} {label}: {query}",
             subtitle=f"in {scope} — **{len(hits)}** matches. Pick one to read:",
+            badges=badges,
         )
         await interaction.response.send_message(view=view, ephemeral=True)
 
     # --- The lookups --------------------------------------------------------
+
+    @app_commands.command(
+        name="lookup",
+        description="Search EVERYTHING — rules, items, transport, tables & careers, badged by type.",
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        query="What to look up — anything: overwatch, AK-74, hit location, ranger",
+        book="Optional: narrow to a single book",
+    )
+    @app_commands.autocomplete(source=_game_autocomplete, book=_book_autocomplete)
+    async def lookup(
+        self,
+        interaction: discord.Interaction,
+        source: str,
+        query: str,
+        book: str | None = None,
+    ) -> None:
+        await self._lookup(interaction, None, source, query, book)
 
     @app_commands.command(
         name="rule",

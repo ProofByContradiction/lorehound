@@ -109,6 +109,29 @@ class TestGoldMatching(unittest.TestCase):
         self.assertLess(cover, 0.5)
 
 
+class TestLookupBadges(unittest.TestCase):
+    """The /lookup type-badge mapping + reference-exclusion (cog-level logic)."""
+
+    def test_badge_per_category(self):
+        from lorehound.cogs import rules_cog as rc
+
+        self.assertEqual(rc._badge("rules"), "📖")
+        self.assertEqual(rc._badge("items"), "🎒")
+        self.assertEqual(rc._badge("transport"), "🚙")
+        self.assertEqual(rc._badge("tables"), "📊")
+        self.assertEqual(rc._badge("card"), "🪖")
+        self.assertEqual(rc._badge("anything-unknown"), "📖")  # safe default
+
+    def test_lookup_excludes_reference_index(self):
+        from lorehound.cogs import rules_cog as rc
+
+        # /lookup surfaces every player-facing category but never the book's
+        # alphabetical index / page-footer fragments.
+        self.assertIn("reference", rc._LOOKUP_SKIP)
+        self.assertNotIn("card", rc._LOOKUP_SKIP)
+        self.assertNotIn("rules", rc._LOOKUP_SKIP)
+
+
 @unittest.skipUnless(
     os.environ.get("LOREHOUND_GOLD_EVAL"),
     "set LOREHOUND_GOLD_EVAL=1 to run the live gold retrieval regression (needs Drive + cache)",

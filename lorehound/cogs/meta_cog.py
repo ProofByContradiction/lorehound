@@ -32,6 +32,7 @@ def capabilities_card(bot: commands.Bot) -> discord.ui.LayoutView:
         ui.separator(),
         ui.text(
             "**📚 Rules Library** — search the loaded books, then pick a result to read:\n"
+            "`/lookup source:<game> query:<topic>` — search **everything**, badged by type 🔎\n"
             "`/rule source:<game> query:<topic>` — how to play: stats, abilities, specialties\n"
             "`/item source:<game> query:<topic>` — gear, weapons, equipment\n"
             "`/transport source:<game> query:<topic>` — vehicles, ships, craft & parts\n"
