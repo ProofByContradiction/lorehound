@@ -199,6 +199,27 @@ def demote_noise_doc(page_texts: list[str], *, max_repeats: int = _MAX_REPEATS) 
     return [demote_noise(t, max_repeats=max_repeats, counts=counts) for t in page_texts]
 
 
+def dedup_dropcaps(md: str) -> str:
+    """Drop drop-cap-mangled heading duplicates. A chapter whose big decorative
+    initial split into its own span loses that letter (``NTRODUCTION``); the full
+    title (``Introduction``, usually the injected ToC heading) is also present, so
+    we drop the fragment when some other heading equals it plus one leading letter."""
+    full = set()
+    for line in md.splitlines():
+        m = _HEADING_RE.match(line)
+        if m:
+            full.add(_MARKUP_RE.sub("", m.group(2)).strip().lower())
+    out = []
+    for line in md.splitlines():
+        m = _HEADING_RE.match(line)
+        if m:
+            t = _MARKUP_RE.sub("", m.group(2)).strip().lower()
+            if len(t) >= 4 and any(o[1:] == t for o in full if len(o) == len(t) + 1):
+                continue  # fragment of a fuller heading (missing its drop-cap letter)
+        out.append(line)
+    return "\n".join(out)
+
+
 def inject_toc_headings(doc, page_texts: list[str]) -> list[str]:
     """Prepend each ToC chapter heading to the top of its page chunk.
 
