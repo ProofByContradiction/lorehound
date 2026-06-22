@@ -246,6 +246,22 @@ def _table_name(title: str, section: str, rows: list[list[str]]) -> str:
     return "Table"
 
 
+def _is_real_table(rows: list[list[str]]) -> bool:
+    """Reject diagram-like grids that find_tables mis-detects as tables — e.g. the
+    numbers scattered around a hit-location / firing-arc figure. A real rules/gear
+    table has actual word content, not just stray digits/single characters."""
+    cells = [(c or "").strip() for r in rows for c in r]
+    nonempty = [c for c in cells if c]
+    if len(nonempty) < 4:
+        return False
+    empty_frac = 1 - len(nonempty) / len(cells)
+    wordish = sum(1 for c in nonempty if sum(ch.isalpha() for ch in c) >= 3) / len(nonempty)
+    # Diagram garbage = a sparse grid with almost no words (digits scattered around a
+    # figure). Real number/code tables (die types, %s, damage) stay dense, so require
+    # BOTH sparsity and near-zero text before rejecting.
+    return not (empty_frac > 0.35 and wordish < 0.25)
+
+
 def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     """Build chunks from the structured tables recovered in drive_client.
 
@@ -264,7 +280,7 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     chunks: list[Chunk] = []
     for t in tables:
         rows = t.get("rows") or []
-        if len(rows) < 2:
+        if len(rows) < 2 or not _is_real_table(rows):
             continue
         name = _table_name(t.get("title", ""), t.get("section", ""), rows)
         chapter = (t.get("chapter") or "").strip()
