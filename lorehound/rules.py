@@ -125,9 +125,9 @@ def _heading(line: str) -> tuple[int, str] | None:
 
 
 def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
-    from .headings import dedup_dropcaps
+    from .headings import dedup_dropcaps, drop_frontmatter
 
-    text = dedup_dropcaps(text)  # drop "NTRODUCTION" when "Introduction" is also a heading
+    text = drop_frontmatter(dedup_dropcaps(text))  # drop drop-cap frags + credit labels
     game, book = _split_game_and_file(path)
     chapter = ""   # level-1 heading
     section = ""   # deeper heading

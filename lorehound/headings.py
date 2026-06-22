@@ -199,6 +199,30 @@ def demote_noise_doc(page_texts: list[str], *, max_repeats: int = _MAX_REPEATS) 
     return [demote_noise(t, max_repeats=max_repeats, counts=counts) for t in page_texts]
 
 
+_FRONT_MATTER = frozenset({
+    "credits", "illustrations", "interior illustrations", "additional illustrations",
+    "cover art", "cover artist", "additional art", "art direction", "graphic design",
+    "layout", "author", "authors", "editor", "editors", "writer", "writers",
+    "special thanks", "acknowledgements", "acknowledgments", "dedication",
+    "playtesters", "playtesting", "proofreading", "proofreaders", "cartography",
+    "contents", "table of contents",
+})
+
+
+def drop_frontmatter(md: str) -> str:
+    """Demote front-matter credit labels (Credits, Illustrations, Cover Art, Author …)
+    — they head names, not rules, and never occur as a real content section. Exact
+    (whole-heading) match only, so "Ship Layout" / "Co-Author Rules" are untouched."""
+    out = []
+    for line in md.splitlines():
+        m = _HEADING_RE.match(line)
+        if m and _MARKUP_RE.sub("", m.group(2)).strip().lower() in _FRONT_MATTER:
+            out.append(m.group(2))  # demote to plain text
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def dedup_dropcaps(md: str) -> str:
     """Drop drop-cap-mangled heading duplicates. A chapter whose big decorative
     initial split into its own span loses that letter (``NTRODUCTION``); the full
