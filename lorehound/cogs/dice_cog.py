@@ -103,10 +103,7 @@ def _t2k_card(interaction, result, *, untrained: bool) -> discord.ui.LayoutView:
     if result.succeeded and result.ammo_hits:
         notes.append(f"_{result.successes} from the check + {result.ammo_hits} from ammo._")
     if result.ammo is not None:
-        notes.append(
-            f"🔫 **{result.rounds_spent}** rounds spent  ·  _ammo sum "
-            f"{result.ammo.total} + 1_"
-        )
+        notes.append(f"🔫 **{result.rounds_spent}** rounds spent")
         if result.jam_ones:
             line = (
                 f"🔧 **{result.jam_ones}× ⚀** — pushing this roll would cost "

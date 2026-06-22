@@ -22,6 +22,9 @@ _GAP = "   "             # column separator (3 spaces)
 _BUDGET = 100
 _MIN_COL = 3
 _MAX_COL = 40           # a single column only wraps past this many characters
+_REPEAT_MIN = 25        # tables longer than this re-print the header as you scroll
+_REPEAT_EVERY = 18      # …every this many body rows (pseudo-sticky header)
+_MOBILE_GRID_MAX = 42   # wider 3+ column tables render as vertical records (mobile-safe)
 
 
 def _wrap_cell(text: str, width: int) -> list[str]:
@@ -48,6 +51,36 @@ def _fit_widths(nat: list[int], budget: int) -> list[int]:
     return [min(n, best) for n in nat]
 
 
+def _render_vertical(grid: list[list[str]]) -> str:
+    """Render a wide table as one vertical record per row — ``**Label:** value``
+    pairs that wrap to the screen, so nothing overflows on mobile. Markdown (not a
+    code block) so Discord reflows it to the viewport width."""
+    header = grid[0]
+    ncols = len(header)
+    # The "name" column: first column with wordy values; short leading code columns
+    # (a roll/index) fold into the record's bold lead line.
+    name_col = 0
+    for j in range(ncols):
+        vals = [grid[r][j] for r in range(1, len(grid)) if grid[r][j]]
+        if vals and sum(len(v) for v in vals) / len(vals) > 4:
+            name_col = j
+            break
+    blocks = []
+    for r in range(1, len(grid)):
+        row = grid[r]
+        lead = " · ".join(c for c in row[: name_col + 1] if c) or "—"
+        fields = [
+            f"**{header[j]}:** {row[j]}" if header[j] else row[j]
+            for j in range(name_col + 1, ncols)
+            if row[j]
+        ]
+        block = f"**{lead}**"
+        if fields:
+            block += "\n" + "  ·  ".join(fields)
+        blocks.append(block)
+    return "\n\n".join(blocks)
+
+
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     """Render a cell grid (first row = header) as a clean monospace table.
 
@@ -63,6 +96,13 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
         return "```\n(empty table)\n```", False
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
+
+    # Mobile can't horizontally scroll a code block (the swipe is hijacked, and wide
+    # tables just squish), so a wide 3+ column table renders as vertical per-row
+    # records that wrap to the screen instead of overflowing.
+    natural = [max((len(grid[r][j]) for r in range(len(grid))), default=0) for j in range(ncols)]
+    if ncols >= 3 and sum(natural) + len(_GAP) * (ncols - 1) > _MOBILE_GRID_MAX:
+        return _render_vertical(grid), False
 
     nat = [
         max(_MIN_COL, min(_MAX_COL, max((len(grid[r][i]) for r in range(len(grid))), default=0)))
@@ -90,9 +130,18 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
             out.append(_GAP.join(parts).rstrip())
         return out
 
-    lines = [f"{_HEAD}{ln}{_RESET}" for ln in fmt_row(0)]  # bold header (may wrap)
-    lines.append(_GAP.join("─" * widths[i] for i in range(ncols)))
-    for r in range(1, len(grid)):
+    # Header block (bold, may wrap) + the underline rule.
+    head_block = [f"{_HEAD}{ln}{_RESET}" for ln in fmt_row(0)]
+    head_block.append(_GAP.join("─" * widths[i] for i in range(ncols)))
+
+    # Discord can't freeze a header on scroll, so on long tables re-print it every
+    # few rows — a header stays within view as you scroll. Short tables print once.
+    body = list(range(1, len(grid)))
+    repeat = len(body) > _REPEAT_MIN
+    lines = list(head_block)
+    for n, r in enumerate(body):
+        if repeat and n and n % _REPEAT_EVERY == 0:
+            lines += head_block
         lines += fmt_row(r)
 
     wide = ncols >= 6 or (sum(widths) + gap) > 58
