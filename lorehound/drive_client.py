@@ -31,10 +31,9 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 GOOGLE_DOC = "application/vnd.google-apps.document"
 GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
-# Markdown extraction lineage. Bump when the to_markdown path itself changes
-# (e.g. switching pymupdf-layout off for the ML-free font-histogram headings) so
+# Markdown extraction lineage. Bump when the to_markdown path itself changes so
 # stale Markdown is recomputed even though the source file is unchanged.
-MD_VERSION = "pymupdf-md-nolayout-v1"
+MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
 TABLE_VERSION = "find-tables-lines-v1"
@@ -183,30 +182,35 @@ class DriveClient:
         return text, tables
 
     def _pdf_markdown(self, data: bytes) -> str:
-        """PDF bytes -> Markdown with one ``[[page N]]`` marker per page, using
-        pymupdf4llm's ML-free (font-histogram + column_boxes) path."""
+        """PDF bytes -> Markdown with one ``[[page N]]`` marker per page.
+
+        Headings come from our own ML-free style detector (bold/colour/size) plus
+        the embedded ToC for chapter titles, with diagram / page-number / running-
+        label noise demoted — pymupdf4llm's size-only headings missed the styled
+        headings in e.g. Mongoose Traveller books, chunking them as blobs. See
+        ``lorehound/headings``."""
         import fitz  # PyMuPDF
         import pymupdf4llm
 
-        # pymupdf4llm 0.3.4 is ML-free by default (font-size headings +
-        # column_boxes reading order). Newer 1.27.x builds add an opt-in ONNX
-        # layout model via use_layout(); turn it off if running against one of
-        # those (0.3.4 has no such function, so guard the call).
+        from .headings import StyleHeadings, demote_noise_doc, inject_toc_headings
+
+        # 0.3.4 is ML-free already; guard for 1.27.x where use_layout() exists.
         if hasattr(pymupdf4llm, "use_layout"):
             pymupdf4llm.use_layout(False)
 
         doc = fitz.open(stream=data, filetype="pdf")
         try:
             pages = pymupdf4llm.to_markdown(
-                doc, page_chunks=True, show_progress=False
+                doc, hdr_info=StyleHeadings(doc), page_chunks=True, show_progress=False
             )
+            texts = [
+                p.get("text", "") if isinstance(p, dict) else str(p) for p in pages
+            ]
+            texts = demote_noise_doc(texts)          # drop page-numbers / repeated labels
+            texts = inject_toc_headings(doc, texts)  # add publisher ToC chapter headings
         finally:
             doc.close()
-        out = []
-        for i, p in enumerate(pages, start=1):
-            md = p.get("text", "") if isinstance(p, dict) else str(p)
-            out.append(f"[[page {i}]]\n{md}")
-        return "\n\n".join(out)
+        return "\n\n".join(f"[[page {i}]]\n{t}" for i, t in enumerate(texts, start=1))
 
     def _pdf_tables(self, data: bytes) -> list[dict]:
         """Recover structured tables (via an isolated subprocess), tagging each
