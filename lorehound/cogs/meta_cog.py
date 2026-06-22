@@ -36,7 +36,7 @@ def capabilities_card(bot: commands.Bot) -> discord.ui.LayoutView:
             "`/item source:<game> query:<topic>` — gear, weapons, equipment\n"
             "`/transport source:<game> query:<topic>` — vehicles, ships, craft & parts\n"
             "`/table source:<game> name:<table>` — print a rules table\n"
-            "`/sources` — list games & books  ·  `/rules_sync` — re-index the library"
+            "`/sources` — list games & books  ·  `/reindex` — re-index the library (operator)"
         ),
         ui.separator(),
         ui.text("-# `/help` shows this · you can also **@mention me** anytime"),

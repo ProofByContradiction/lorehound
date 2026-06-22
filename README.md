@@ -30,7 +30,7 @@ Slash commands (`/help` is authoritative):
 /transport source:<game> query:…    # vehicles, ships, craft, mounts & parts
 /table source:<game> name:<table>   # find & print a rules table
 /sources                            # list the games + books available
-/rules_sync                         # re-pull and re-index the library from Drive
+/reindex [force:true]               # (operator) re-pull and re-index from Drive
 ```
 
 Lookups (`/rule`, `/item`, `/transport`, `/table`) take a `source:` game (with
@@ -49,8 +49,8 @@ own spent rounds. See `lorehound/twilight.py`.
   (`search_index.py`) — no paid search/embedding APIs, no vector DB, no GPU.
   Nothing about a query leaves your host. The tradeoff (keyword vs. semantic) is
   the right one for rulebooks, where you usually know the term.
-- **Your books are the source of truth, via Drive.** Nothing is bundled. A GM
-  drops a book in the Drive folder and runs `/rules_sync` — no redeploy. The
+- **Your books are the source of truth, via Drive.** Nothing is bundled. The
+  operator drops a book in the Drive folder and runs `/reindex` — no redeploy. The
   folder *is* the taxonomy: **one subfolder per game**, and that name becomes the
   `source:` value.
 - **Config is environment variables, not a committed file.** Keeps secrets out of
@@ -86,8 +86,8 @@ create a **service account**, add a **JSON key**. Save it as `service_account.js
 (gitignored) or paste it into `GOOGLE_CREDENTIALS_JSON`. In Drive: make a top
 folder, add **one subfolder per game**, drop books in, **Share** the top folder
 with the service-account email (Viewer), and put its ID (`…/folders/<THIS>`) in
-`DRIVE_FOLDER_ID`. Start the bot, run `/rules_sync`, then `/rule source:<game>
-query:<topic>`.
+`DRIVE_FOLDER_ID`. Start the bot (it indexes automatically on launch), or run
+`/reindex` to refresh on demand, then `/rule source:<game> query:<topic>`.
 
 ## Configuration
 
@@ -194,7 +194,7 @@ lorehound/
 │   ├── rules.py            # ties Drive + extraction + index together
 │   └── cogs/
 │       ├── dice_cog.py     # /roll /d /t2k
-│       ├── rules_cog.py    # /rule /item /transport /table /sources /rules_sync
+│       ├── rules_cog.py    # /rule /item /transport /table /sources /reindex
 │       └── meta_cog.py     # /help + @mention intro
 ├── scripts/
 │   └── retrieval_eval.py   # gold-query retrieval regression eval (local; needs the library)

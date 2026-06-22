@@ -312,11 +312,14 @@ class RulesService:
     def ready(self) -> bool:
         return not self.index.is_empty
 
-    def refresh(self) -> dict:
-        """(Re)download from Drive and rebuild the index. Returns a summary."""
+    def refresh(self, force: bool = False) -> dict:
+        """(Re)download from Drive and rebuild the index. Returns a summary.
+
+        ``force=True`` re-extracts every file from scratch (ignores the cache),
+        for picking up changed extraction code without a version bump."""
         if self.drive is None:
             raise RuntimeError("Google Drive is not configured.")
-        docs = self.drive.fetch_all()
+        docs = self.drive.fetch_all(force=force)
         chunks: list[Chunk] = []
         for doc in docs:
             chunks.extend(_chunks_for_doc(doc.name, doc.text))

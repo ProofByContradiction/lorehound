@@ -29,10 +29,10 @@ GREEN = discord.Colour.green()
 
 _NOT_CONFIGURED = (
     "📚 Google Drive isn't connected yet. Add your `DRIVE_FOLDER_ID` and Google "
-    "service-account credentials (see the README), then run `/rules_sync`."
+    "service-account credentials (see the README), then run `/reindex`."
 )
 _NOT_READY = (
-    "📚 Nothing indexed yet — give it a minute after startup, or run `/rules_sync`."
+    "📚 Nothing indexed yet — give it a minute after startup, or run `/reindex`."
 )
 _META = {
     "rules": ("📖", "Rules"),
@@ -434,18 +434,36 @@ class RulesCog(commands.Cog):
     # --- Library management -------------------------------------------------
 
     @app_commands.command(
-        name="rules_sync", description="Re-pull and re-index the library from Drive."
+        name="reindex",
+        description="(Operator) Re-pull and re-index the library from Google Drive.",
     )
-    async def rules_sync(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        force="Ignore the extraction cache and re-extract every file from scratch (slow).",
+    )
+    # Hidden from non-managers in guild command lists; the operator check below is
+    # the real authorization (default_permissions doesn't apply in DMs).
+    @app_commands.default_permissions(manage_guild=True)
+    async def reindex(
+        self, interaction: discord.Interaction, force: bool = False
+    ) -> None:
+        # Reindexing re-downloads the operator's private Drive and rebuilds the
+        # single index every server shares — so it's operator-only, not a per-guild
+        # admin action. Widen this (e.g. to guild admins) only if that changes.
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message(
+                "🔒 Only the bot operator can reindex the shared library.",
+                ephemeral=True,
+            )
+            return
         if self.rules.drive is None:
             await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
             return
 
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            summary = await asyncio.to_thread(self.rules.refresh)
+            summary = await asyncio.to_thread(self.rules.refresh, force)
         except Exception as exc:  # noqa: BLE001 - surface the error to the user
-            await interaction.followup.send(f"⚠️ Sync failed: {exc}", ephemeral=True)
+            await interaction.followup.send(f"⚠️ Reindex failed: {exc}", ephemeral=True)
             return
 
         games: dict[str, list[str]] = summary["games"]
@@ -453,11 +471,13 @@ class RulesCog(commands.Cog):
             f"**🎲 {game}** ({len(files)})\n" + "\n".join(f"- {f}" for f in files)
             for game, files in games.items()
         )
+        mode = "full re-extract (cache bypassed)" if force else "incremental (changed files only)"
         view = ui.card(
-            ui.text("### ✅ Library synced"),
+            ui.text("### ✅ Library reindexed"),
             ui.text(
                 f"Indexed **{summary['documents']}** book(s) across "
-                f"**{len(games)}** game(s) — **{summary['chunks']}** searchable chunks."
+                f"**{len(games)}** game(s) — **{summary['chunks']}** searchable chunks.\n"
+                f"-# {mode}"
             ),
             ui.separator(),
             ui.text(blocks[:4000]),

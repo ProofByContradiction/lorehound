@@ -365,8 +365,13 @@ class DriveClient:
         except Exception as exc:  # noqa: BLE001
             print(f"[drive] cache write failed for {file_id}: {exc}")
 
-    def fetch_all(self) -> list[DriveDoc]:
-        """Download and extract text + tables from every supported file (cached)."""
+    def fetch_all(self, force: bool = False) -> list[DriveDoc]:
+        """Download and extract text + tables from every supported file (cached).
+
+        ``force=True`` ignores the on-disk cache and re-extracts every file from
+        freshly-downloaded bytes — use it to re-run changed extraction *code*
+        against unchanged files without bumping ``MD_VERSION``/``TABLE_VERSION``.
+        """
         if self.cache_dir:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,7 +379,7 @@ class DriveClient:
         for f in self.list_files():
             source = f.get("path", f["name"])
             modified = f.get("modifiedTime", "")
-            cached = self._read_cache(f["id"], modified)
+            cached = None if force else self._read_cache(f["id"], modified)
             if cached is not None:
                 text, tables = cached
             else:
@@ -385,9 +390,9 @@ class DriveClient:
                     # Reuse markdown and tables independently: a markdown-method
                     # change recomputes only the Markdown and keeps the tables
                     # (and vice-versa), downloading the bytes only if either is
-                    # actually stale.
-                    reused_md = self._read_cached_text(f["id"], modified)
-                    reused_tb = self._read_cached_tables(f["id"], modified)
+                    # actually stale. ``force`` skips both reuses → full re-extract.
+                    reused_md = None if force else self._read_cached_text(f["id"], modified)
+                    reused_tb = None if force else self._read_cached_tables(f["id"], modified)
                     data = (
                         self._download_bytes(f["id"])
                         if reused_md is None or reused_tb is None
