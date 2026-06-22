@@ -16,9 +16,12 @@ _ESC = "\x1b"
 _HEAD = f"{_ESC}[1;36m"  # bold cyan header row
 _RESET = f"{_ESC}[0m"
 _GAP = "   "             # column separator (3 spaces)
-_BUDGET = 78            # target content width — desktop-friendly; mobile scrolls
+# Prefer single-line rows: a generous width ceiling so cells wrap only when a table
+# is genuinely too wide. Discord code blocks scroll horizontally, so wide-but-
+# single-line beats narrow-but-wrapped for legibility.
+_BUDGET = 100
 _MIN_COL = 3
-_MAX_COL = 32           # a single column never gets wider than this before wrapping
+_MAX_COL = 40           # a single column only wraps past this many characters
 
 
 def _wrap_cell(text: str, width: int) -> list[str]:
