@@ -25,7 +25,7 @@ import fitz
 import pymupdf4llm
 from pymupdf4llm.helpers.pymupdf_rag import IdentifyHeaders
 
-from lorehound.headings import StyleHeadings, demote_noise, inject_toc_headings
+from lorehound.headings import StyleHeadings, demote_noise_doc, inject_toc_headings
 
 _CACHE = "/tmp/lh_eval_pdfs"
 
@@ -37,7 +37,7 @@ def _toks(s):
 def _by_page(doc, hdr, demote=False, inject=False):
     texts = [p["text"] for p in pymupdf4llm.to_markdown(doc, hdr_info=hdr, page_chunks=True)]
     if demote:
-        texts = [demote_noise(t) for t in texts]
+        texts = demote_noise_doc(texts)
     if inject:
         texts = inject_toc_headings(doc, texts)
     return {

@@ -141,39 +141,62 @@ class StyleHeadings:
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _MARKUP_RE = re.compile(r"[*_`#]")
-_MAX_REPEATS = 3  # a heading text recurring more than this is a running header/sidebar
-# (real section headings recur ≤2-3×; table-header rows / running labels recur 4×+)
+_MAX_REPEATS = 40  # doc-wide: a heading recurring more than this is a running header / repeated
+# stat-block label (MAINTENANCE COST etc.). Tuned via threshold sweep: 40 strips the egregious
+# spam (recurs 40+×) while sparing real repeated sections (per-alien "Careers" etc.) — only ~1
+# real heading lost in a 120-sample, vs 9 lost at threshold 8. Recall-first.
 
 
-def demote_noise(md: str, *, max_repeats: int = _MAX_REPEATS) -> str:
-    """Demote false headings that only the *full line* reveals — table-header
-    rows (too long / too many words) and running headers/sidebars (a heading text
-    that recurs many times). Demoted lines keep their text, minus the ``#`` prefix.
+def _is_pure_number(text: str) -> bool:
+    """True for '83', '0.5', '+1', '–' — page numbers / stray values, never headings."""
+    return not any(ch.isalpha() for ch in text)
 
-    The per-span ``get_header_id`` can't see these (a table-header line is several
-    short bold spans; recurrence is document-wide), so this runs on the rendered
-    Markdown.
-    """
-    lines = md.splitlines()
-    counts: Counter = Counter()
-    parsed = []
-    for line in lines:
+
+def _heading_counts(md: str) -> Counter:
+    c: Counter = Counter()
+    for line in md.splitlines():
         m = _HEADING_RE.match(line)
-        visible = _MARKUP_RE.sub("", m.group(2)).strip() if m else None
-        parsed.append((line, m, visible))
-        if visible:
-            counts[visible.lower()] += 1
+        if m:
+            c[_MARKUP_RE.sub("", m.group(2)).strip().lower()] += 1
+    return c
 
+
+def demote_noise(md: str, *, max_repeats: int = _MAX_REPEATS, counts: Counter | None = None) -> str:
+    """Demote false headings the per-span hook can't see — **pure-number** 'headings'
+    (page numbers), **table-header rows** (too long / too many words), and **running
+    headers / repeated stat-block labels** (recur > max_repeats). Demoted lines keep
+    their text, minus the ``#`` prefix.
+
+    Pass ``counts`` (from :func:`_heading_counts` over a whole document) to judge
+    recurrence across all pages, not just within this string — see
+    :func:`demote_noise_doc`.
+    """
+    counts = counts if counts is not None else _heading_counts(md)
     out = []
-    for line, m, visible in parsed:
-        if m and visible:
-            too_long = len(visible.split()) > _MAX_WORDS or len(visible) > _MAX_LEN
-            too_repeated = counts[visible.lower()] > max_repeats
-            if too_long or too_repeated:
+    for line in md.splitlines():
+        m = _HEADING_RE.match(line)
+        if m:
+            vis = _MARKUP_RE.sub("", m.group(2)).strip()
+            if vis and (
+                _is_pure_number(vis)
+                or len(vis.split()) > _MAX_WORDS
+                or len(vis) > _MAX_LEN
+                or counts[vis.lower()] > max_repeats
+            ):
                 out.append(m.group(2))  # keep the text, drop the heading prefix
                 continue
         out.append(line)
     return "\n".join(out)
+
+
+def demote_noise_doc(page_texts: list[str], *, max_repeats: int = _MAX_REPEATS) -> list[str]:
+    """:func:`demote_noise` across a whole document — recurrence counted over ALL pages,
+    so a label appearing once per page (e.g. a ship's ``MAINTENANCE COST``) is seen as the
+    running noise it is. Use this, not per-page ``demote_noise``."""
+    counts: Counter = Counter()
+    for t in page_texts:
+        counts.update(_heading_counts(t))
+    return [demote_noise(t, max_repeats=max_repeats, counts=counts) for t in page_texts]
 
 
 def inject_toc_headings(doc, page_texts: list[str]) -> list[str]:
