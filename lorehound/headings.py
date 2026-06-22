@@ -11,7 +11,8 @@ auto-calibrated per document, and assigns heading levels by rank. It implements
 the same ``get_header_id(span, page)`` contract as ``IdentifyHeaders``, so it
 drops into ``pymupdf4llm.to_markdown(doc, hdr_info=StyleHeadings(doc))``.
 
-Prototype (deep-research finding #2). Not yet wired into the extraction path.
+Wired into the extraction path: ``drive_client._pdf_markdown`` runs
+``StyleHeadings`` → :func:`demote_noise_doc` → :func:`inject_toc_headings`.
 """
 
 from __future__ import annotations
