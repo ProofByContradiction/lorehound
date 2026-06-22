@@ -1,0 +1,27 @@
+name: tests
+
+# Runs the unit suite on every push/PR so dice-engine, chunking, retrieval-ranking
+# and table-rendering regressions are caught automatically (the security-audit
+# workflow only checks dependencies, not behaviour).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime dependencies
+        # The chunking/heading tests import pymupdf via lorehound.headings, so the
+        # runtime deps are required. No Discord/Drive credentials are needed — the
+        # suite is pure-logic (no network).
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v

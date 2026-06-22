@@ -196,9 +196,12 @@ lorehound/
 │       ├── dice_cog.py     # /roll /d /t2k
 │       ├── rules_cog.py    # /rule /item /transport /table /sources /rules_sync
 │       └── meta_cog.py     # /help + @mention intro
+├── scripts/
+│   └── retrieval_eval.py   # gold-query retrieval regression eval (local; needs the library)
 └── tests/
     ├── test_dice.py        # dice + Twilight mechanics
-    └── test_rules.py       # chunking, tables, heading boost
+    ├── test_rules.py       # chunking, tables, heading boost
+    └── test_retrieval.py   # BM25 scoping/ranking invariants + gold regression
 ```
 
 ## Tests
@@ -207,4 +210,28 @@ lorehound/
 python -m unittest        # or: python -m pytest (if installed)
 ```
 
-No Discord token or network access required.
+No Discord token or network access required — the suite is pure logic. It runs
+in CI on every push/PR (`.github/workflows/tests.yml`), alongside the daily
+dependency security audit.
+
+### Retrieval quality eval
+
+`eval/gold_queries.json` is an answer key (query → `key_facts`) for measuring
+whether the bot returns *correct* rules, not just plausible-looking passages —
+the north-star metric the heading/chunking work serves. Run it against your
+indexed library:
+
+```bash
+python scripts/retrieval_eval.py            # human-readable report
+python scripts/retrieval_eval.py --json     # machine-readable summary
+```
+
+It builds the live index from the Drive cache (no re-download for unchanged
+files) and scores each query's retrieved passages, so it needs Google Drive
+configured + a populated `cache/` — the copyrighted books can't live in the
+repo, so this is a **local** guard, not a CI check. The same eval is wired into
+the suite as an opt-in regression test:
+
+```bash
+LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_retrieval
+```

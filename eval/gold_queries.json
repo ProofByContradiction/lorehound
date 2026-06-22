@@ -12,7 +12,7 @@
       "T2K (Free League 4E) has no free authoritative SRD; T2K entries below are core mechanics from twilight.py, not an external source."
     ],
     "created": "2026-06-21",
-    "status": "prototype gold set — expand when wiring the heading work and when new sources arrive"
+    "status": "wired into scripts/retrieval_eval.py + tests/test_retrieval.py (regression guard). Baseline fact-recall 0.32 (2026-06-22): right sections retrieved, but granular table values often miss top-k. Expand as new sources arrive."
   },
   "entries": [
     {
