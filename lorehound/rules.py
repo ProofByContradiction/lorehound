@@ -57,6 +57,60 @@ _ITEM = re.compile(
 )
 
 
+# Topic buckets for grouping the /table list when browsing. Generic TTRPG topics
+# matched on the table NAME first (most reliable — a "RADIATION SICKNESS" table
+# lives under a "Combat & Damage" chapter but is Health), then the chapter. Order
+# matters: the first topic whose keyword is found wins.
+_TABLE_TOPICS: list[tuple[str, tuple[str, ...]]] = [
+    ("Health", ("disease", "radiat", "sick", "heal", "medical", "surger", "trauma",
+                "poison", "drug", "infect", "fatigue", "blister")),
+    ("Character", ("character", "player", "attribute", "skill", "specialt",
+                   "career", "background", "aging", "education", "talent", "qualif",
+                   "advancement", "muster", "rank", "base dice", "success",
+                   "archetype", "life path", "trait")),
+    ("Travel", ("travel", "terrain", "forag", "hunt", "encumbr", "movement", "jump",
+                "fuel", "navigat", "mishap", "camp", "driving", "weather", "light",
+                "climate", "distance", "journey")),
+    ("Vehicles", ("vehicle", "ship", "craft", "hull", "thrust", "spacecraft",
+                  "high guard", "turret", "spinal", "mount")),
+    ("Combat", ("combat", "damage", "hit", "attack", "fire", "melee", "initiative",
+                "recoil", "autofire", "blast", "penetrat", "action", "ambush",
+                "deviation", "barrier", "location", "chemical", "area of effect")),
+    ("Gear", ("gear", "equipment", "weapon", "armou", "ammo", "supply", "price",
+              "cost", "kit", "reliab", "radio", "firearm", "smg", "rifle", "pistol",
+              "catalog", "quantit", "tool")),
+    ("World", ("encounter", "reaction", "patron", "rumour", "animal", "trade",
+               "cargo", "sector", "system", "government", "starport", "planet")),
+]
+# A chapter that's a filename / page artefact, not a real topic.
+_NON_TOPIC = re.compile(r"^(pdf|page|\d+|.*\.pdf)$", re.I)
+
+# Match a keyword at a word boundary (prefix), so "forag" hits "foraging" but
+# "aging" does NOT match "for-aging" — substring matching mis-grouped tables.
+_TABLE_TOPIC_RES = [
+    (topic, re.compile(r"\b(" + "|".join(words) + ")", re.I))
+    for topic, words in _TABLE_TOPICS
+]
+
+
+def _topic_match(text: str) -> str | None:
+    for topic, rx in _TABLE_TOPIC_RES:
+        if rx.search(text):
+            return topic
+    return None
+
+
+def table_topic(chapter: str, name: str) -> str:
+    """Group a rules table under a browsing topic (Combat / Health / Character /
+    Travel / Vehicles / Gear / World). The table name decides it where possible,
+    else the chapter; failing both, the cleaned chapter, else "Other"."""
+    return (
+        _topic_match(name)
+        or _topic_match(chapter)
+        or (chapter.split(".", 1)[-1].strip() if chapter and not _NON_TOPIC.match(chapter.strip()) else "Other")
+    )
+
+
 def _category(book: str, chapter: str, section: str) -> str:
     """Classify as 'rules', 'items', or 'transport' from the most specific heading."""
     for text in (section, chapter, book):

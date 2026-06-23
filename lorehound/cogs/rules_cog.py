@@ -20,7 +20,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import ui
-from ..rules import RulesService
+from ..rules import RulesService, table_topic
 from ..search_index import SearchHit
 from ..tables import render_item, render_table
 
@@ -108,31 +108,36 @@ async def _career_autocomplete(
 async def _table_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> list[app_commands.Choice[str]]:
-    """Once a source is chosen, offer the tables available in that game."""
+    """Tables for the chosen game, grouped by topic (Combat / Health / Character /
+    Travel / …) so the list reads as ``Topic › Table`` instead of a flat dump."""
     rules: RulesService = interaction.client.rules_service  # type: ignore[attr-defined]
     game = _resolve_game(rules, getattr(interaction.namespace, "source", "") or "")
     if game is None:
         return []
     cur = current.lower()
-    seen: set[str] = set()
-    out: list[app_commands.Choice[str]] = []
-    tables = sorted(
-        (c for c in rules.index.chunks if c.category == "tables" and c.game == game),
-        key=lambda c: c.section,  # groups by chapter (the breadcrumb's first part)
-    )
-    for c in tables:
-        disp = c.section + (f" · {c.locator}" if c.locator else "")
+    seen: set[tuple] = set()
+    items: list[tuple[str, str, str]] = []  # (topic, leaf, display)
+    for c in rules.index.chunks:
+        if c.category != "tables" or c.game != game or not c.section:
+            continue
+        chapter = c.section.split("›")[0].strip()
+        leaf = c.section.split("›")[-1].strip()
+        if not leaf:
+            continue
+        topic = table_topic(chapter, leaf)
+        disp = f"{topic} › {leaf}" + (f" · {c.locator}" if c.locator else "")
         if cur and cur not in disp.lower():
             continue
-        key = disp.lower()
+        key = (topic.lower(), leaf.lower(), c.locator)
         if key in seen:
             continue
         seen.add(key)
-        leaf = c.section.split("›")[-1].strip() if c.section else "table"
-        out.append(app_commands.Choice(name=disp[:100], value=leaf[:100]))
-        if len(out) >= 25:
-            break
-    return out
+        items.append((topic, leaf, disp))
+    items.sort(key=lambda x: (x[0], x[1]))  # cluster by topic, then table name
+    return [
+        app_commands.Choice(name=disp[:100], value=leaf[:100])
+        for _topic, leaf, disp in items[:25]
+    ]
 
 
 # --- Select-to-read card ----------------------------------------------------

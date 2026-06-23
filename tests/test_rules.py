@@ -183,5 +183,37 @@ class TestTables(unittest.TestCase):
         self.assertEqual(chunks[0].section, "Player Characters › Stockpiles")
 
 
+class TestTableTopic(unittest.TestCase):
+    """Topic grouping for the /table browser."""
+
+    def test_name_beats_chapter(self):
+        from lorehound.rules import table_topic
+
+        # These live under the "Combat & Damage" chapter but the NAME decides.
+        self.assertEqual(table_topic("Combat & Damage", "RADIATION SICKNESS"), "Health")
+        self.assertEqual(table_topic("Combat & Damage", "DISEASES"), "Health")
+        self.assertEqual(table_topic("Combat & Damage", "HIT LOCATION"), "Combat")
+
+    def test_word_boundary_not_substring(self):
+        from lorehound.rules import table_topic
+
+        # "FORAGING" must be Travel, not Character via the substring "aging".
+        self.assertEqual(table_topic("Travel", "FORAGING MODIFIERS"), "Travel")
+
+    def test_character_and_chapter_fallback(self):
+        from lorehound.rules import table_topic
+
+        self.assertEqual(table_topic("Player Characters", "ATTRIBUTE SCORES"), "Character")
+        self.assertEqual(table_topic("Player Characters", "Introduction"), "Character")
+
+    def test_filename_chapter_is_other(self):
+        from lorehound.rules import table_topic
+
+        # Traveller's no-ToC tables have chapter "pdf"; with no name keyword → Other.
+        self.assertEqual(table_topic("pdf", "Zaxquib Index"), "Other")
+        # …but a recognizable name still classifies.
+        self.assertEqual(table_topic("pdf", "Mustering Out Benefits"), "Character")
+
+
 if __name__ == "__main__":
     unittest.main()
