@@ -207,8 +207,32 @@ def detect_careers(chunks) -> dict[str, dict[str, Career]]:
                 if g is not c and max((len(r) for r in g.rows), default=0) == width
             ]
             for career in careers_from_card(c, sibling_specialties=sibs):
-                index.setdefault(career.game, {})[career.name.lower()] = career
+                game = index.setdefault(career.game, {})
+                key = career.name.lower()
+                if key in game:
+                    _merge_sections(game[key], career)  # e.g. add gear to a card
+                else:                                    # carrying req/rank/skills
+                    game[key] = career
     return index
+
+
+def _section_key(label: str) -> str:
+    """Normalized section label for dedup — collapses specialty spellings
+    ("Specialty (D6)" / "Specialities (D6)") so the same field isn't shown twice."""
+    low = label.strip().lower()
+    return "specialty" if low.startswith("special") else low
+
+
+def _merge_sections(base: Career, extra: Career) -> None:
+    """Fold ``extra``'s sections into ``base``, skipping labels already present —
+    so a career split across cards (T2K military: stats on one page, gear on the
+    next) becomes one complete card."""
+    have = {_section_key(s.label) for s in base.sections if s.label}
+    for s in extra.sections:
+        if not s.label or _section_key(s.label) not in have:
+            base.sections.append(s)
+            if s.label:
+                have.add(_section_key(s.label))
 
 
 # --- Generic fallback: search-assemble --------------------------------------

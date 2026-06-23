@@ -100,6 +100,53 @@ class TestSiblingSpecialtyMerge(unittest.TestCase):
         self.assertIn(["1", "Teacher"], grids[0].rows)
 
 
+class TestSectionMerge(unittest.TestCase):
+    """A career split across cards (T2K military: stats on one page, gear on the
+    next) must merge into one complete card, not overwrite."""
+
+    def test_same_named_cards_merge_sections(self):
+        stats = _card(
+            [["CAREER", "SCOUT"], ["REQUIREMENTS", "INT B+"], ["SKILLS", "Recon"]],
+            locator="p. 34",
+        )
+        gear = _card(
+            [["CAREER", "SCOUT"], ["STARTING GEAR", "✓ Rifle"]], locator="p. 35"
+        )
+        scout = detect_careers([stats, gear])["Twilight 2000 (4E)"]["scout"]
+        have = {s.label for s in scout.sections}
+        self.assertIn("Requirements", have)
+        self.assertIn("Skills", have)
+        self.assertIn("Starting Gear", have)  # merged from the second card
+
+
+class TestColStarts(unittest.TestCase):
+    def test_clusters_columns_by_gap(self):
+        from lorehound.pdf_tables import _col_starts
+
+        # label@95, then careers; wrapped words within a cell stay in their column.
+        xs = [95, 161, 161, 239, 307, 335, 377, 378, 466]
+        self.assertEqual(_col_starts(xs, gap=34), [95, 161, 239, 307, 377, 466])
+
+
+class TestCareerGridFallback(unittest.TestCase):
+    """The geometric reconstructor only runs where find_tables didn't already get
+    a clean career card — otherwise it duplicates/mangles cleanly-detected pages."""
+
+    def test_detects_clean_career_card(self):
+        from lorehound.pdf_tables import _has_clean_career_card
+
+        clean = [{"rows": [["CAREER", "FIREMAN", "EMT"], ["REQUIREMENTS", "STR B+", "EMP B+"],
+                            ["SKILLS", "x", "y"]]}]
+        self.assertTrue(_has_clean_career_card(clean))
+
+    def test_fragments_are_not_a_clean_card(self):
+        from lorehound.pdf_tables import _has_clean_career_card
+
+        frags = [{"rows": [["1", "Melee", "Racer"], ["2", "Runner", "Sniper"]]},
+                 {"rows": [["SPECIALTY (D6)", "", ""], ["1", "Rifleman", "Intel"]]}]
+        self.assertFalse(_has_clean_career_card(frags))
+
+
 class TestTitle(unittest.TestCase):
     def test_words_acronyms_and_mixed(self):
         self.assertEqual(_title("FIREMAN"), "Fireman")

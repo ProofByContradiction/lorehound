@@ -92,6 +92,130 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
     return "rules"
 
 
+# --- Geometric career-grid reconstruction ----------------------------------
+#
+# Some character-creation career tables (the T2K *military* careers) have
+# inconsistent ruling lines, so ``find_tables`` shatters them into per-row bands
+# and the CAREER/REQUIREMENTS/RANK/SKILLS rows leak into the page text as
+# delimiter-less prose. They reconstruct cleanly from geometry, though: the
+# columns sit at stable X positions (one per career, derived from the header
+# row) and every row is delimited by its first-column label. We bucket each word
+# into (row-band by Y, column by X) — independent of ruling lines.
+
+_CAREER_HDR = "career"
+# First-column row labels that mark a career table (a 2nd word like RANK in
+# "STARTING RANK" sits right of the label column, so matching the lead word is
+# enough). System-specific label sets plug in here.
+_CAREER_FIELDS = (
+    "requirements", "starting", "rank", "skills",
+    "specialty", "specialities", "specialties",
+)
+
+
+def _col_starts(xs: list[float], gap: float = 34.0) -> list[float]:
+    """Left edges of the columns: a new column begins wherever a sorted X-start
+    jumps more than ``gap`` past the previous column's start."""
+    starts: list[float] = []
+    for x in xs:
+        if not starts or x - starts[-1] > gap:
+            starts.append(x)
+    return starts
+
+
+def _career_grids(page, page_no: int) -> list[dict]:
+    """Reconstruct character-creation career tables from word geometry.
+
+    A page can stack several career tables (plus prose between them), so we
+    segment by ``CAREER`` header: each header starts a table that runs down
+    through its first-column field labels until the next header. Returns one grid
+    per reconstructed table (possibly empty)."""
+    words = [w for w in page.get_text("words") if w[4].strip()]
+    if not words:
+        return []
+
+    def label_of(w) -> str | None:
+        t = w[4].strip().lower().strip(":")
+        if t == _CAREER_HDR:
+            return "career"
+        return t if t in _CAREER_FIELDS else None
+
+    tagged = [(w, label_of(w)) for w in words if label_of(w)]
+    if not tagged:
+        return []
+    label_x = min(w[0] for w, _ in tagged)
+    labels = [(w, l) for w, l in tagged if abs(w[0] - label_x) <= 12]
+    header_ys = sorted(w[1] for w, l in labels if l == "career")
+    if not header_ys:
+        return []
+
+    grids: list[dict] = []
+    for hi, career_y in enumerate(header_ys):
+        seg_end = header_ys[hi + 1] if hi + 1 < len(header_ys) else page.rect.height
+        # Field-label anchors within this header's segment.
+        anchors: list[float] = []
+        for y in sorted(round(w[1]) for w, _ in labels if career_y - 1 <= w[1] < seg_end):
+            if not anchors or y - anchors[-1] > 6:
+                anchors.append(y)
+        if len({l for w, l in labels if career_y - 1 <= w[1] < seg_end} - {"career"}) < 2:
+            continue  # not enough field rows to be a career table
+        # Specialty roll rows (1..9 in the label column, below the SPECIALTY label).
+        spec_ys = [w[1] for w, l in labels if l.startswith("special") and career_y <= w[1] < seg_end]
+        if spec_ys:
+            spec_y = min(spec_ys)
+            for w in words:
+                t = w[4].strip()
+                if (
+                    t.isdigit() and 1 <= int(t) <= 9
+                    and abs(w[0] - label_x) <= 12
+                    and spec_y + 2 < w[1] < seg_end
+                ):
+                    y = round(w[1])
+                    if all(abs(y - a) > 6 for a in anchors):
+                        anchors.append(y)
+            anchors.sort()
+
+        nxt = min((a for a in anchors if a > career_y + 3), default=career_y + 20)
+        hdr_words = [w for w in words if career_y - 2 <= w[1] < nxt - 2 and w[0] >= label_x - 4]
+        cols = _col_starts(sorted(w[0] for w in hdr_words))
+        if len(cols) < 3:
+            continue  # need a label column + at least two careers
+
+        def col_of(x: float, _cols=cols) -> int:
+            c = 0
+            for i, cx in enumerate(_cols):
+                if x >= cx - 6:
+                    c = i
+            return c
+
+        grid: list[list[str]] = []
+        for i, top in enumerate(anchors):
+            bottom = anchors[i + 1] if i + 1 < len(anchors) else min(top + 19, seg_end)
+            buckets: list[list] = [[] for _ in cols]
+            for w in words:
+                if top - 3 <= w[1] < bottom - 3 and w[0] >= label_x - 6:
+                    buckets[col_of(w[0])].append(w)
+            row = [
+                " ".join(x[4] for x in sorted(b, key=lambda w: (round(w[1] / 3), w[0])))
+                for b in buckets
+            ]
+            if any(row):
+                grid.append(row)
+        if len(grid) >= 3 and len(grid[0]) >= 3:
+            grids.append({"page": page_no, "title": "CAREER", "rows": grid})
+    return grids
+
+
+def _has_clean_career_card(tables: list[dict]) -> bool:
+    """True if ``find_tables`` already captured a proper career card here (header
+    row leads with CAREER). The geometric reconstructor is only a *fallback* for
+    pages where it didn't — running it on cleanly-detected pages mangles names."""
+    for t in tables:
+        rows = t.get("rows") or []
+        if len(rows) >= 3 and rows[0] and rows[0][0].strip().upper().startswith("CAREER"):
+            return True
+    return False
+
+
 def extract_tables(page, page_no: int) -> list[dict]:
     raw = page.find_tables(strategy="lines").tables
     # Drop degenerate detections (empty cells make .bbox raise).
@@ -103,8 +227,12 @@ def extract_tables(page, page_no: int) -> list[dict]:
             continue
         if t.cells:
             found.append(t)
+
+    # Geometrically-reconstructed career tables (when ruling-line detection above
+    # shattered them) — appended so /class gets the full requirements/rank/skills.
+    extra = _career_grids(page, page_no)
     if not found:
-        return []
+        return extra
 
     # Bands that share a left/right x-span belong to the same column layout.
     by_col: dict[tuple, list] = defaultdict(list)
@@ -155,6 +283,10 @@ def extract_tables(page, page_no: int) -> list[dict]:
                         "rows": rows,
                     }
                 )
+    # Geometric reconstruction is a fallback: skip it when find_tables already
+    # captured the career card cleanly (otherwise it duplicates / mangles names).
+    if extra and not _has_clean_career_card(out):
+        out.extend(extra)
     return out
 
 
@@ -163,18 +295,32 @@ def _main() -> None:
 
     Run as a subprocess so table detection happens in a clean interpreter —
     importing pymupdf4llm in-process corrupts PyMuPDF's find_tables (empty cells).
+    PyMuPDF also prints chatter to stdout (e.g. the "pymupdf_layout" hint); we
+    silence stdout at the fd level during extraction so ONLY our JSON reaches the
+    parent, which does ``json.loads(stdout)``.
     """
     import json
+    import os
     import sys
 
     import fitz
 
     doc = fitz.open(sys.argv[1])
-    out: list[dict] = []
-    for i in range(doc.page_count):
-        out.extend(extract_tables(doc[i], i + 1))
+    saved_fd = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    try:
+        out: list[dict] = []
+        for i in range(doc.page_count):
+            out.extend(extract_tables(doc[i], i + 1))
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved_fd, 1)  # restore real stdout for the JSON
+        os.close(devnull)
+        os.close(saved_fd)
     doc.close()
-    print(json.dumps(out))
+    sys.stdout.write(json.dumps(out))
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":

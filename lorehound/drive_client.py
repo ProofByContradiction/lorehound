@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,7 +37,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v1"
+TABLE_VERSION = "find-tables-lines-v3-careergrid"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
@@ -151,18 +152,28 @@ class DriveClient:
 
     # --- Download + extract -------------------------------------------------
 
-    def _download_bytes(self, file_id: str) -> bytes:
+    def _download_bytes(self, file_id: str, attempts: int = 3) -> bytes:
         from googleapiclient.http import MediaIoBaseDownload
 
-        request = self.service.files().get_media(
-            fileId=file_id, supportsAllDrives=True
-        )
-        buf = io.BytesIO()
-        downloader = MediaIoBaseDownload(buf, request)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-        return buf.getvalue()
+        # Retry transient network failures (a connection reset mid-download
+        # shouldn't abort a whole reindex of many books).
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                request = self.service.files().get_media(
+                    fileId=file_id, supportsAllDrives=True
+                )
+                buf = io.BytesIO()
+                downloader = MediaIoBaseDownload(buf, request)
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+                return buf.getvalue()
+            except Exception as exc:  # noqa: BLE001 - retry, then re-raise
+                last_exc = exc
+                if attempt + 1 < attempts:
+                    time.sleep(2 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
 
     def _export_google_doc(self, file_id: str) -> str:
         data = (
