@@ -301,17 +301,25 @@ def _career_items(career) -> list[discord.ui.Item]:
         ui.text(f"in **{career.game}**"),
         ui.separator(),
     ]
-    prose, grids = [], []
+    prose, blocks, grids = [], [], []
     for s in career.sections:
         if s.rows:
             block, _wide = render_table(s.rows)
             grids.append((f"**{s.label}**\n{block}" if s.label else block)[:1500])
+        elif "✓" in s.text:
+            # A checklist field (e.g. starting gear) — render the ✓ items as a list
+            # under a bold label, instead of one run-on line.
+            picks = [x.strip(" ,") for x in s.text.split("✓") if x.strip(" ,")]
+            head = f"**{s.label}:**\n" if s.label else ""
+            blocks.append((head + "\n".join(f"• {p}" for p in picks))[:1500])
         elif s.label:
             prose.append(f"**{s.label}:** {s.text}")
         elif s.text:
             prose.append(s.text)
     if prose:
         items.append(ui.text("\n".join(prose)[:3500]))
+    for b in blocks:
+        items.append(ui.text(b))
     for g in grids[:4]:
         items.append(ui.text(g))
     note = (

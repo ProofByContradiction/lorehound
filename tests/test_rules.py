@@ -126,6 +126,25 @@ class TestTables(unittest.TestCase):
         _out, wide = render_table(rows)
         self.assertTrue(wide)  # >= 6 columns may scroll on mobile
 
+    def test_wide_roll_table_renders_as_roll_results(self):
+        from lorehound.tables import render_table
+
+        rows = [
+            ["D10", "INJURY", "LETHAL", "TIME LIMIT", "EFFECTS", "HEAL TIME"],
+            ["1", "Crushed toes", "No", "–", "Running is harder", "2D6"],
+            ["10", "Severed leg", "Yes", "Stretch", "Cannot run", "Permanent"],
+        ]
+        out, wide = render_table(rows)
+        self.assertFalse(wide)               # collapsed to a narrow 2-col table
+        self.assertIn("Roll (D10)", out)     # die column gets a proper header
+        self.assertIn("Results", out)
+        # The other columns collapse into the Results cell, labelled.
+        self.assertIn("Crushed toes", out)
+        self.assertIn("Lethal: No", out)
+        self.assertIn("Heal Time: 2D6", out)
+        # The raw "D10 1" dice-lead format is gone.
+        self.assertNotIn("D10 1", out)
+
     def test_tables_for_doc_routes_by_category(self):
         from lorehound.rules import _tables_for_doc
 

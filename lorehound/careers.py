@@ -74,7 +74,30 @@ def _title(s: str) -> str:
 # --- Structured detector: column cards (T2K) --------------------------------
 
 
-def careers_from_card(chunk) -> list[Career]:
+def _is_specialty_grid(rows) -> bool:
+    """A standalone SPECIALTY (D6) roll grid: an *unnamed* header (a D6 marker, or
+    no career names) over rows whose first cell is a roll index. These sit on their
+    own page beside the named card whose careers they belong to (T2K military)."""
+    rows = [[(c or "").strip() for c in r] for r in rows]
+    if len(rows) < 3:
+        return False
+    h = rows[0]
+    unnamed = bool(_D6_MARKER.search(h[0])) or not any(_looks_like_name(x) for x in h)
+    numbered = sum(1 for r in rows[1:] if r and _ROLL_LABEL.match(r[0]))
+    return unnamed and numbered >= 2
+
+
+def _specialty_column(grid_rows, col: int) -> list[list[str]]:
+    """Pull career column ``col`` out of a specialty grid as a ``Roll (D6)`` table."""
+    rows = [[(c or "").strip() for c in r] for r in grid_rows]
+    out = [["Roll (D6)", "Specialty"]]
+    for r in rows[1:]:
+        if r and _ROLL_LABEL.match(r[0]) and col < len(r) and r[col]:
+            out.append([r[0], r[col]])
+    return out if len(out) > 1 else []
+
+
+def careers_from_card(chunk, sibling_specialties=()) -> list[Career]:
     """Parse a T2K-style *column card* into one :class:`Career` per career column.
 
     Layout (rows): ``row[0] = [<label>, NAME1, NAME2, ...]`` then field rows
@@ -82,6 +105,10 @@ def careers_from_card(chunk) -> list[Career]:
     sub-table whose following ``1..6`` rows give each career's per-roll options.
     The first cell of ``row[0]`` is a label (CAREER / blank); a *numeric* first cell
     means this is a stray roll-table fragment, not a career header — skip it.
+
+    ``sibling_specialties`` are specialty grids (same column layout) found on a
+    neighbouring page — used to supply specialties for cards (the T2K *military*
+    careers) whose own specialty table was split onto the next page.
     """
     rows = [[(c or "").strip() for c in r] for r in (chunk.rows or [])]
     if len(rows) < 2:
@@ -108,7 +135,7 @@ def careers_from_card(chunk) -> list[Career]:
             if _D6_MARKER.search(label):
                 in_spec, cur = True, None
                 spec_label = _title(label)
-                spec_rows = [["D6", "Specialty"]]
+                spec_rows = [["Roll (D6)", "Specialty"]]
                 continue
             if in_spec and _ROLL_LABEL.match(label):
                 if val:
@@ -129,6 +156,15 @@ def careers_from_card(chunk) -> list[Career]:
                 sections.append(cur)
         if len(spec_rows) > 1:
             sections.append(CareerSection(label=spec_label, rows=spec_rows))
+        # If this card carried no specialties of its own, graft them from a sibling
+        # specialty grid on the next page (column index lines up — both are
+        # [label, career1, career2, ...]).
+        if not any(s.rows for s in sections):
+            for sg in sibling_specialties:
+                col = _specialty_column(sg, i)
+                if col:
+                    sections.append(CareerSection(label="Specialities (D6)", rows=col))
+                    break
         sections = [s for s in sections if s.text or s.rows]  # drop empty fields
         if sections:
             careers.append(
@@ -146,15 +182,32 @@ def careers_from_card(chunk) -> list[Career]:
 def detect_careers(chunks) -> dict[str, dict[str, Career]]:
     """Build the structured-career index: ``game -> {name_lower -> Career}``.
 
-    Runs the structured detectors over the indexed chunks. Games absent here have
-    no structured careers and fall back to :func:`assemble_career` at query time.
+    Runs the structured detectors over the indexed chunks. Cards are grouped by
+    source so a card whose specialty table was split onto a neighbouring page (the
+    T2K military careers) can borrow it from a sibling specialty grid of matching
+    width. Games absent here fall back to :func:`assemble_career` at query time.
     """
-    index: dict[str, dict[str, Career]] = {}
+    from collections import defaultdict
+
+    by_source: dict[tuple, list] = defaultdict(list)
     for c in chunks:
-        if c.category != "card" or not getattr(c, "rows", None):
-            continue
-        for career in careers_from_card(c):
-            index.setdefault(career.game, {})[career.name.lower()] = career
+        if c.category == "card" and getattr(c, "rows", None):
+            by_source[(c.game, c.source)].append(c)
+
+    index: dict[str, dict[str, Career]] = {}
+    for cards in by_source.values():
+        spec_grids = [c for c in cards if _is_specialty_grid(c.rows)]
+        for c in cards:
+            width = max((len(r) for r in c.rows), default=0)
+            # Sibling specialty grids that share this card's column layout (same
+            # width) — their columns line up with this card's career columns.
+            sibs = [
+                g.rows
+                for g in spec_grids
+                if g is not c and max((len(r) for r in g.rows), default=0) == width
+            ]
+            for career in careers_from_card(c, sibling_specialties=sibs):
+                index.setdefault(career.game, {})[career.name.lower()] = career
     return index
 
 

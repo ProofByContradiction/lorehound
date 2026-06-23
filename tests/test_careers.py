@@ -50,7 +50,7 @@ class TestColumnCardDetector(unittest.TestCase):
         self.assertIn("COMMAND", d["Skills"].text)
         self.assertEqual(d["Starting Gear"].text, "Axe, Helmet")  # continuation folded in
         spec = next(s for s in fire.sections if s.rows)
-        self.assertEqual(spec.rows[0], ["D6", "Specialty"])
+        self.assertEqual(spec.rows[0], ["Roll (D6)", "Specialty"])
         self.assertIn(["1", "Combat Medic"], spec.rows)
 
     def test_blank_value_label_still_opens_section(self):
@@ -66,6 +66,38 @@ class TestColumnCardDetector(unittest.TestCase):
         self.assertEqual(careers_from_card(frag), [])  # numeric first cell = fragment
         draft = _card([["LAST CAREER", "MILITARY", "BLUE COLLAR"], ["x", "y", "z"]])
         self.assertEqual(careers_from_card(draft), [])  # draft mechanic, not careers
+
+
+class TestSiblingSpecialtyMerge(unittest.TestCase):
+    """T2K military careers: names+gear on one page, the SPECIALTY (D6) grid on the
+    next (unnamed columns that position-align to the careers)."""
+
+    def test_merges_specialty_grid_by_column(self):
+        gear = _card(
+            [["", "COMBAT ARMS", "COMBAT SUPPORT"], ["STARTING GEAR", "✓ Rifle", "✓ Radio"]],
+            locator="p. 35",
+        )
+        spec = _card(
+            [["SPECIALTY (D6)", "", ""], ["1", "Rifleman", "Intelligence"],
+             ["2", "Redleg", "Linguist"]],
+            locator="p. 34",
+        )
+        idx = detect_careers([gear, spec])["Twilight 2000 (4E)"]
+        ca = idx["combat arms"]
+        grid = next(s for s in ca.sections if s.rows)
+        self.assertEqual(grid.label, "Specialities (D6)")
+        self.assertIn(["1", "Rifleman"], grid.rows)        # column 1 = Combat Arms
+        cs = idx["combat support"]
+        grid2 = next(s for s in cs.sections if s.rows)
+        self.assertIn(["1", "Intelligence"], grid2.rows)   # column 2 = Combat Support
+
+    def test_no_merge_when_card_has_own_specialties(self):
+        # A self-contained civilian card must not pick up a sibling grid.
+        own = _card([["CAREER", "NURSE"], ["SPECIALITIES (D6)", ""], ["1", "Teacher"]])
+        idx = detect_careers([own])["Twilight 2000 (4E)"]
+        grids = [s for s in idx["nurse"].sections if s.rows]
+        self.assertEqual(len(grids), 1)
+        self.assertIn(["1", "Teacher"], grids[0].rows)
 
 
 class TestTitle(unittest.TestCase):
