@@ -183,12 +183,12 @@ class DriveClient:
         )
         return data.decode("utf-8") if isinstance(data, bytes) else str(data)
 
-    def _extract_pdf(self, data: bytes) -> tuple[str, list[dict]]:
+    def _extract_pdf(self, data: bytes, game: str = "") -> tuple[str, list[dict]]:
         """PDF bytes -> (Markdown with one ``[[page N]]`` marker per page,
         structured tables recovered via pdf_tables)."""
         # Tables run in an isolated subprocess (find_tables only), so order no
         # longer matters; keep them first for consistency with the old path.
-        tables = self._pdf_tables(data)
+        tables = self._pdf_tables(data, game=game)
         text = self._pdf_markdown(data)
         return text, tables
 
@@ -223,9 +223,10 @@ class DriveClient:
             doc.close()
         return "\n\n".join(f"[[page {i}]]\n{t}" for i, t in enumerate(texts, start=1))
 
-    def _pdf_tables(self, data: bytes) -> list[dict]:
+    def _pdf_tables(self, data: bytes, game: str = "") -> list[dict]:
         """Recover structured tables (via an isolated subprocess), tagging each
-        with its TOC chapter/section and a routing category."""
+        with its TOC chapter/section and a routing category. ``game`` selects a
+        source profile in the subprocess (hybrid indexer; see ``lorehound.sources``)."""
         import os
         import subprocess
         import sys
@@ -239,7 +240,7 @@ class DriveClient:
         raw: list[dict] = []
         try:
             proc = subprocess.run(
-                [sys.executable, "-m", "lorehound.pdf_tables", tmp],
+                [sys.executable, "-m", "lorehound.pdf_tables", tmp, game],
                 capture_output=True,
                 text=True,
                 timeout=600,
@@ -300,7 +301,9 @@ class DriveClient:
             if mime == GOOGLE_DOC:
                 return self._export_google_doc(f["id"]), []
             if mime == "application/pdf" or name.lower().endswith(".pdf"):
-                return self._extract_pdf(self._download_bytes(f["id"]))
+                path = f.get("path", name)
+                game = path.split("/", 1)[0] if "/" in path else "General"
+                return self._extract_pdf(self._download_bytes(f["id"]), game=game)
             if mime.startswith("text/") or name.lower().endswith((".txt", ".md")):
                 return (
                     self._download_bytes(f["id"]).decode("utf-8", errors="replace"),
@@ -409,9 +412,13 @@ class DriveClient:
                         if reused_md is None or reused_tb is None
                         else None
                     )
+                    # Game = top-level Drive folder, selects the source profile.
+                    game = source.split("/", 1)[0] if "/" in source else "General"
                     text = reused_md if reused_md is not None else self._pdf_markdown(data)
                     tables = (
-                        reused_tb if reused_tb is not None else self._pdf_tables(data)
+                        reused_tb
+                        if reused_tb is not None
+                        else self._pdf_tables(data, game=game)
                     )
                 else:
                     text, tables = self._extract_text(f)

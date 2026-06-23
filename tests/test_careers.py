@@ -147,6 +147,33 @@ class TestCareerGridFallback(unittest.TestCase):
         self.assertFalse(_has_clean_career_card(frags))
 
 
+class TestSourceProfiles(unittest.TestCase):
+    """The hybrid indexer registry: known games get a profile, others fall back to
+    the generic baseline (None)."""
+
+    def test_t2k_profile_registered_and_matches(self):
+        import lorehound.pdf_tables  # noqa: F401 - import registers the T2K profile
+        from lorehound.sources import profile_for
+
+        p = profile_for("Twilight 2000 (4E)")
+        self.assertIsNotNone(p)
+        self.assertEqual(p.name, "Twilight 2000 (4E)")
+        self.assertTrue(p.reconstructors)
+
+    def test_unknown_game_has_no_profile(self):
+        import lorehound.pdf_tables  # noqa: F401
+        from lorehound.sources import profile_for
+
+        self.assertIsNone(profile_for("Call of Cthulhu 7e"))
+
+    def test_profile_matches_substring(self):
+        from lorehound.sources import SourceProfile
+
+        prof = SourceProfile("X", ("traveller",))
+        self.assertTrue(prof.matches("Traveller (Mongoose)"))
+        self.assertFalse(prof.matches("Twilight 2000"))
+
+
 class TestTitle(unittest.TestCase):
     def test_words_acronyms_and_mixed(self):
         self.assertEqual(_title("FIREMAN"), "Fireman")

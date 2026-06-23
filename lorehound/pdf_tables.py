@@ -216,7 +216,9 @@ def _has_clean_career_card(tables: list[dict]) -> bool:
     return False
 
 
-def extract_tables(page, page_no: int) -> list[dict]:
+def extract_tables(page, page_no: int, profile=None) -> list[dict]:
+    """Generic table extraction for one page, plus any source-specific
+    reconstructions from ``profile`` (the hybrid indexer — see :mod:`sources`)."""
     raw = page.find_tables(strategy="lines").tables
     # Drop degenerate detections (empty cells make .bbox raise).
     found = []
@@ -227,12 +229,6 @@ def extract_tables(page, page_no: int) -> list[dict]:
             continue
         if t.cells:
             found.append(t)
-
-    # Geometrically-reconstructed career tables (when ruling-line detection above
-    # shattered them) — appended so /class gets the full requirements/rank/skills.
-    extra = _career_grids(page, page_no)
-    if not found:
-        return extra
 
     # Bands that share a left/right x-span belong to the same column layout.
     by_col: dict[tuple, list] = defaultdict(list)
@@ -283,11 +279,32 @@ def extract_tables(page, page_no: int) -> list[dict]:
                         "rows": rows,
                     }
                 )
-    # Geometric reconstruction is a fallback: skip it when find_tables already
-    # captured the career card cleanly (otherwise it duplicates / mangles names).
-    if extra and not _has_clean_career_card(out):
-        out.extend(extra)
+    # Source-specific geometric reconstructions (career grids, gear cards, ship
+    # blocks) for layouts the generic pass can't recover; baseline-only otherwise.
+    if profile is not None:
+        out.extend(profile.reconstruct(page, page_no, out))
     return out
+
+
+def _t2k_careers(page, page_no, existing) -> list[dict]:
+    """T2K career reconstructor: rebuild column career-cards geometrically, but
+    only where find_tables didn't already capture a clean one (fallback)."""
+    if _has_clean_career_card(existing):
+        return []
+    return _career_grids(page, page_no)
+
+
+# --- Source profiles (hybrid indexer; see lorehound/sources.py) -------------
+
+from . import sources  # noqa: E402
+
+sources.register(
+    sources.SourceProfile(
+        name="Twilight 2000 (4E)",
+        games=("twilight", "t2k", "2000"),
+        reconstructors=[_t2k_careers],
+    )
+)
 
 
 def _main() -> None:
@@ -298,6 +315,8 @@ def _main() -> None:
     PyMuPDF also prints chatter to stdout (e.g. the "pymupdf_layout" hint); we
     silence stdout at the fd level during extraction so ONLY our JSON reaches the
     parent, which does ``json.loads(stdout)``.
+
+    Argv: ``<pdf-path> [game]`` — ``game`` selects a source profile.
     """
     import json
     import os
@@ -306,13 +325,15 @@ def _main() -> None:
     import fitz
 
     doc = fitz.open(sys.argv[1])
+    game = sys.argv[2] if len(sys.argv) > 2 else ""
+    profile = sources.profile_for(game)
     saved_fd = os.dup(1)
     devnull = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull, 1)
     try:
         out: list[dict] = []
         for i in range(doc.page_count):
-            out.extend(extract_tables(doc[i], i + 1))
+            out.extend(extract_tables(doc[i], i + 1, profile))
     finally:
         sys.stdout.flush()
         os.dup2(saved_fd, 1)  # restore real stdout for the JSON
