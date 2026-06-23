@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from .careers import Career, assemble_career, detect_careers
 from .drive_client import DriveClient
 from .search_index import Chunk, SearchHit, SearchIndex
 
@@ -307,6 +308,9 @@ class RulesService:
     def __init__(self, drive: DriveClient | None) -> None:
         self.drive = drive
         self.index = SearchIndex()
+        # Structured careers per game: {game -> {name_lower -> Career}}. Built at
+        # index time; games absent here fall back to search-assemble in find_career.
+        self.careers: dict[str, dict[str, Career]] = {}
 
     @property
     def ready(self) -> bool:
@@ -325,10 +329,12 @@ class RulesService:
             chunks.extend(_chunks_for_doc(doc.name, doc.text))
             chunks.extend(_tables_for_doc(doc.name, doc.tables))
         self.index.build(chunks)
+        self.careers = detect_careers(chunks)
         return {
             "documents": len(docs),
             "chunks": len(chunks),
             "games": self.index.files_by_game,
+            "careers": sum(len(v) for v in self.careers.values()),
         }
 
     def search(
@@ -342,3 +348,17 @@ class RulesService:
         return self.index.search(
             query, top_k=top_k, game=game, book=book, category=category
         )
+
+    # --- Careers (/class) ---------------------------------------------------
+
+    def career_names(self, game: str) -> list[str]:
+        """Structured career names for a game (for autocomplete); [] if none."""
+        return sorted(c.name for c in self.careers.get(game, {}).values())
+
+    def find_career(self, game: str, name: str) -> Career | None:
+        """A career by name: the structured card if we have one, else a generic
+        search-assembled card from the game's indexed career content."""
+        structured = self.careers.get(game, {}).get(name.strip().lower())
+        if structured is not None:
+            return structured
+        return assemble_career(self.search, game, name)

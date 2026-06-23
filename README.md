@@ -29,6 +29,7 @@ Slash commands (`/help` is authoritative):
 /rule source:<game> query:<topic>   # how to play: stats, abilities, specialties
 /item source:<game> query:<topic>   # gear, weapons, equipment
 /transport source:<game> query:…    # vehicles, ships, craft, mounts & parts
+/class source:<game> career:<name>  # career/class card (requirements, skills, specialties)
 /table source:<game> name:<table>   # find & print a rules table
 /sources                            # list the games + books available
 /reindex [force:true]               # (operator) re-pull and re-index from Drive
@@ -191,11 +192,12 @@ lorehound/
 │   ├── pdf_tables.py       # isolated-subprocess table detection (PyMuPDF find_tables)
 │   ├── tables.py           # render recovered tables for Discord
 │   ├── search_index.py     # tiny built-in BM25 search (no numpy / vector DB)
+│   ├── careers.py          # system-agnostic career model + detectors (/class)
 │   ├── ui.py               # Components V2 + ANSI output toolkit
 │   ├── rules.py            # ties Drive + extraction + index together
 │   └── cogs/
 │       ├── dice_cog.py     # /roll /d /t2k
-│       ├── rules_cog.py    # /lookup /rule /item /transport /table /sources /reindex
+│       ├── rules_cog.py    # /lookup /rule /item /transport /class /table /sources /reindex
 │       └── meta_cog.py     # /help + @mention intro
 ├── scripts/
 │   └── retrieval_eval.py   # gold-query retrieval regression eval (local; needs the library)

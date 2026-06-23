@@ -88,6 +88,23 @@ async def _book_autocomplete(
     ][:25]
 
 
+async def _career_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """Career names for the chosen game. Empty for systems without structured
+    careers (e.g. Traveller) — there the user free-types and /class assembles."""
+    rules: RulesService = interaction.client.rules_service  # type: ignore[attr-defined]
+    game = _resolve_game(rules, getattr(interaction.namespace, "source", "") or "")
+    if game is None:
+        return []
+    cur = current.lower()
+    return [
+        app_commands.Choice(name=n, value=n)
+        for n in rules.career_names(game)
+        if cur in n.lower()
+    ][:25]
+
+
 async def _table_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> list[app_commands.Choice[str]]:
@@ -270,6 +287,85 @@ class ResultsView(discord.ui.LayoutView):
         self.add_item(container)
 
 
+# --- Career (/class) card ---------------------------------------------------
+
+_CAREER_EMOJI = "🪖"
+
+
+def _career_items(career) -> list[discord.ui.Item]:
+    """Body blocks for a career card — title, fields, roll grids, footnote. Shared
+    by the ephemeral view and the public repost. Prose fields collapse into one
+    block; each grid (e.g. a D6 specialties table) renders as its own table."""
+    items: list[discord.ui.Item] = [
+        ui.text(f"### {_CAREER_EMOJI} {career.name[:240]}"),
+        ui.text(f"in **{career.game}**"),
+        ui.separator(),
+    ]
+    prose, grids = [], []
+    for s in career.sections:
+        if s.rows:
+            block, _wide = render_table(s.rows)
+            grids.append((f"**{s.label}**\n{block}" if s.label else block)[:1500])
+        elif s.label:
+            prose.append(f"**{s.label}:** {s.text}")
+        elif s.text:
+            prose.append(s.text)
+    if prose:
+        items.append(ui.text("\n".join(prose)[:3500]))
+    for g in grids[:4]:
+        items.append(ui.text(g))
+    note = (
+        "⚙️ assembled from indexed mentions — verify in the book"
+        if career.assembled
+        else "verify against the book for rulings"
+    )
+    loc = f" · {career.locator}" if career.locator else ""
+    items.append(ui.separator())
+    items.append(ui.text(f"-# {career.source}{loc} · {note}"))
+    return items
+
+
+def _public_career_card(career, user) -> discord.ui.LayoutView:
+    return ui.card(
+        ui.text(f"-# {_CAREER_EMOJI} Shared by {user.display_name}"),
+        *_career_items(career),
+        accent=TEAL,
+    )
+
+
+class CareerShareButton(discord.ui.Button):
+    """Repost a career card publicly (lookups are private by default)."""
+
+    def __init__(self, career) -> None:
+        super().__init__(label="Show in channel", emoji="📢", style=discord.ButtonStyle.primary)
+        self.career = career
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        try:
+            await interaction.response.send_message(
+                view=_public_career_card(self.career, interaction.user)
+            )
+        except discord.HTTPException as exc:
+            await interaction.response.send_message(
+                f"⚠️ Couldn't post that here: {exc}", ephemeral=True
+            )
+
+
+class CareerView(discord.ui.LayoutView):
+    """The ephemeral career card + a button to share it to the channel."""
+
+    def __init__(self, career) -> None:
+        super().__init__(timeout=180)
+        self.career = career
+        container = discord.ui.Container(accent_colour=TEAL)
+        for item in _career_items(career):
+            container.add_item(item)
+        row = discord.ui.ActionRow()
+        row.add_item(CareerShareButton(career))
+        container.add_item(row)
+        self.add_item(container)
+
+
 class RulesCog(commands.Cog):
     def __init__(self, bot: commands.Bot, rules: RulesService) -> None:
         self.bot = bot
@@ -427,6 +523,49 @@ class RulesCog(commands.Cog):
         await self._lookup(interaction, "transport", source, query, book)
 
     @app_commands.command(
+        name="class",
+        description="Show a CAREER/CLASS card — requirements, skills, specialties & roll tables.",
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        career="Which career/class — pick from the list, or type a name",
+    )
+    @app_commands.autocomplete(source=_game_autocomplete, career=_career_autocomplete)
+    async def class_card(
+        self, interaction: discord.Interaction, source: str, career: str
+    ) -> None:
+        if self.rules.drive is None:
+            await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
+            return
+        if not self.rules.ready:
+            await interaction.response.send_message(_NOT_READY, ephemeral=True)
+            return
+        game = _resolve_game(self.rules, source)
+        if game is None:
+            available = ", ".join(f"`{g}`" for g in self.rules.index.games) or "(none)"
+            await interaction.response.send_message(
+                f"⚠️ I don't have a game called **{source}**. Available: {available}",
+                ephemeral=True,
+            )
+            return
+        # find_career may search-assemble (in-memory, fast) for systems without
+        # structured cards, so no off-thread work is needed.
+        found = self.rules.find_career(game, career)
+        if found is None:
+            names = self.rules.career_names(game)
+            hint = (
+                " Try: " + ", ".join(f"`{n}`" for n in names[:8])
+                if names
+                else " No structured careers for this game yet — try `/lookup` instead."
+            )
+            await interaction.response.send_message(
+                f"No career matching **{career}** in **{game}**.{hint}",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(view=CareerView(found), ephemeral=True)
+
+    @app_commands.command(
         name="table",
         description="Look up and print a rules TABLE (e.g. hit location, fire modifiers).",
     )
@@ -515,11 +654,13 @@ class RulesCog(commands.Cog):
             for game, files in games.items()
         )
         mode = "full re-extract (cache bypassed)" if force else "incremental (changed files only)"
+        careers = summary.get("careers", 0)
         view = ui.card(
             ui.text("### ✅ Library reindexed"),
             ui.text(
                 f"Indexed **{summary['documents']}** book(s) across "
-                f"**{len(games)}** game(s) — **{summary['chunks']}** searchable chunks.\n"
+                f"**{len(games)}** game(s) — **{summary['chunks']}** searchable chunks, "
+                f"**{careers}** careers.\n"
                 f"-# {mode}"
             ),
             ui.separator(),
