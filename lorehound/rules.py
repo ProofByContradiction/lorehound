@@ -386,6 +386,23 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     return chunks
 
 
+def _is_catalog_name(name: str) -> bool:
+    """True if `name` reads like an item/vehicle name rather than a rules-table
+    row that leaked in (a dice result, a percentage outcome, a full sentence)."""
+    if not 2 <= len(name) <= 40:
+        return False
+    low = name.lower()
+    if "%" in name or name.endswith("."):
+        return False
+    if re.match(r"^\d", name):  # "10,", "1DD", "4D", "2D% of crew ..."
+        return False
+    if any(w in low for w in ("suffer", "reduced by", "destroyed", "checks to", " takes ", " dm-", " dm+")):
+        return False
+    if len(name.split()) > 6:  # a catalogue name is a noun phrase, not a sentence
+        return False
+    return True
+
+
 def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]]:
     """Per (game, category) sorted list of item names from catalog tables (wide
     stat blocks — weapons, vehicles), so /item and /transport can offer them in
@@ -394,6 +411,19 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
     from collections import defaultdict
 
     from .tables import _name_col
+
+    # Traveller renders each ship as a per-ship table whose *rows* are its
+    # components (Hull, Bridge, M-Drive…) and whose name lives in the title, not
+    # a column — so the name column yields ship systems, not vehicles. Drop those
+    # stable system terms so they don't masquerade as vehicles in /transport.
+    ship_parts = frozenset({
+        "hull", "bridge", "cargo", "cargo the", "common cargo", "computer",
+        "computer software systems", "sensors", "armour", "armoured bulkheads",
+        "bulkheads", "fuel", "fuel tanks", "power", "power plant", "m-drive",
+        "j-drive", "drive", "staterooms", "common areas", "software", "systems",
+        "weapons", "ammunition", "airlock", "acceleration bench",
+        "maintenance purchase", "tl7", "heavy", "light", "craft",
+    })
 
     names: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
     for c in chunks:
@@ -408,8 +438,10 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
             name = re.sub(r"(\w)- (\w)", r"\1\2", name)  # de-hyphenate "Chal- lenger"
             # Skip pure-uppercase words — those are column headers that leaked in
             # from a fragment table (MAIN WEAPON, REAR), not item names.
-            if len(name) < 2 or (name.replace(" ", "").isalpha() and name.isupper()):
+            if not _is_catalog_name(name) or (name.replace(" ", "").isalpha() and name.isupper()):
                 continue
+            if c.category == "transport" and name.lower() in ship_parts:
+                continue  # a ship system (Hull, Bridge…), not a vehicle
             names[(c.game, c.category)].setdefault(name.lower(), name)
     return {k: sorted(v.values()) for k, v in names.items()}
 

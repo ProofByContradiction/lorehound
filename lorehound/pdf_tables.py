@@ -51,6 +51,55 @@ def _title(page, x0: float, y0: float, x1: float, y1: float) -> str:
     return best[1] if best else ""
 
 
+def _parse_contents_page(doc) -> list[tuple[str, int]]:
+    """Find a printed Contents page and parse it into (CHAPTER TITLE, printed_page)
+    pairs. RPG PDFs often lack usable bookmarks but have a visual ToC page."""
+    for pi in range(min(14, doc.page_count)):
+        lines = [l.strip() for l in doc.load_page(pi).get_text().splitlines() if l.strip()]
+        idx = next((i for i, l in enumerate(lines) if l.upper() == "CONTENTS"), None)
+        if idx is None:
+            continue
+        pairs: list[tuple[str, int]] = []
+        title = None
+        for l in lines[idx + 1:]:
+            if re.fullmatch(r"\d{1,3}", l):
+                if title:
+                    pairs.append((title, int(l)))
+                    title = None
+            elif l.isupper() and len(l) > 3 and any(c.isalpha() for c in l):
+                title = l
+        if len(pairs) >= 4:
+            return pairs
+    return []
+
+
+def toc_from_contents_page(doc) -> list[tuple[int, str, int]]:
+    """Synthesize a ``get_toc()``-style [(level, title, page)] list from the printed
+    Contents page when the PDF has no usable bookmarks. The printed page numbers are
+    mapped to PDF pages via a single offset (printed→PDF is constant within a book),
+    derived by locating a few chapter titles as large headings. Returns 1-based pages."""
+    pairs = _parse_contents_page(doc)
+    if len(pairs) < 4:
+        return []
+    head_page: dict[str, int] = {}
+    for pi in range(doc.page_count):
+        try:
+            blocks = doc.load_page(pi).get_text("dict")["blocks"]
+        except Exception:
+            continue
+        for b in blocks:
+            for ln in b.get("lines", []):
+                spans = ln.get("spans", [])
+                txt = " ".join(s["text"] for s in spans).strip().upper()
+                if len(txt) > 3 and max((s["size"] for s in spans), default=0) >= 18 and txt not in head_page:
+                    head_page[txt] = pi
+    offsets = sorted(head_page[t.upper()] - p for t, p in pairs if t.upper() in head_page)
+    if not offsets:
+        return []
+    offset = offsets[len(offsets) // 2]  # median (robust to a mislocated title)
+    return [(1, title, printed + offset + 1) for title, printed in pairs]
+
+
 def classify_table(chapter: str, rows: list[list[str]]) -> str:
     """Route a structured table to a lookup category from its header + chapter.
 
@@ -99,6 +148,14 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
         k in hdr for k in _KNOWN
     ):
         return "card"
+    # Chapter fallback: when the header gives no signal, a clean single-domain
+    # chapter (e.g. Traveller's Contents-derived "EQUIPMENT" / "VEHICLES") routes
+    # the table. Exact match only, so a mixed chapter like T2K's "Weapons, Vehicles
+    # & Gear" doesn't trip it (its tables already routed by header keywords above).
+    if chap == "EQUIPMENT":
+        return "items"
+    if chap in ("VEHICLES", "COMMON SPACECRAFT"):
+        return "transport"
     return "rules"
 
 

@@ -37,7 +37,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v5-travcareers-gate"
+TABLE_VERSION = "find-tables-lines-v7-toc-chap-level"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
@@ -260,16 +260,29 @@ class DriveClient:
 
         doc = fitz.open(stream=data, filetype="pdf")
         toc = doc.get_toc() or []
+        # Drop structural PDF-wrapper bookmarks ("Front Cover.pdf", "<Book>.pdf")
+        # that some ebooks nest the real ToC under — otherwise they become every
+        # table's "chapter" (e.g. the Traveller core's real chapters sit at level 2
+        # under a level-1 "...Rulebook.pdf"). The shallowest *remaining* level is
+        # then the real chapter level.
+        toc = [t for t in toc if not t[1].strip().lower().endswith(".pdf")]
+        # Few/no real bookmarks left → synthesize a ToC from the printed Contents
+        # page so tables still get real chapter context.
+        if len([t for t in toc if t[2] > 1]) < 5:
+            from .pdf_tables import toc_from_contents_page
+
+            toc = toc_from_contents_page(doc) or toc
         doc.close()
+        chap_level = min((t[0] for t in toc), default=1)
 
         def chapter_section(page_no: int) -> tuple[str, str]:
             chap = sec = ""
             for level, title, pg in toc:
                 if pg > page_no:
                     break
-                if level == 1:
+                if level == chap_level:
                     chap, sec = title, ""
-                elif level == 2:
+                elif level == chap_level + 1:
                     sec = title
             return chap.split(".", 1)[-1].strip(), sec
 
