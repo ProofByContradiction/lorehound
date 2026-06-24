@@ -147,6 +147,38 @@ class TestCareerGridFallback(unittest.TestCase):
         self.assertFalse(_has_clean_career_card(frags))
 
 
+class TestTravellerAnchors(unittest.TestCase):
+    """Heading-anchored Traveller careers: each anchor owns the tables on its page
+    range (up to the next career)."""
+
+    def _anchor(self, name, page):
+        return Chunk("Traveller (Mongoose)", "Core", "card", name, f"p. {page}", "",
+                     rows=[["CAREER", name], ["PAGE", str(page)]])
+
+    def _table(self, section, page):
+        return Chunk("Traveller (Mongoose)", "Core", "tables", section, f"p. {page}",
+                     "skills", rows=[["1D", "Skill"], ["1", "Gun Combat"], ["2", "Recon"]])
+
+    def test_anchor_recognized(self):
+        from lorehound.careers import _is_traveller_anchor
+
+        self.assertTrue(_is_traveller_anchor(self._anchor("Agent", 23)))
+        self.assertFalse(_is_traveller_anchor(self._table("pdf › 1D", 23)))
+
+    def test_career_owns_its_page_range_tables(self):
+        chunks = [
+            self._anchor("Agent", 23), self._anchor("Army", 25),
+            self._table("pdf › Service Skills", 23),  # Agent's page
+            self._table("pdf › Personal Dev", 25),    # Army's page
+        ]
+        trav = detect_careers(chunks)["Traveller (Mongoose)"]
+        self.assertIn("agent", trav)
+        self.assertIn("army", trav)
+        agent_pages = {s.label for s in trav["agent"].sections}
+        self.assertTrue(any("p.23" in p for p in agent_pages))   # got p.23
+        self.assertFalse(any("p.25" in p for p in agent_pages))  # not Army's p.25
+
+
 class TestSourceProfiles(unittest.TestCase):
     """The hybrid indexer registry: known games get a profile, others fall back to
     the generic baseline (None)."""

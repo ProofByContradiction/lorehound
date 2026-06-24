@@ -191,7 +191,7 @@ def detect_careers(chunks) -> dict[str, dict[str, Career]]:
 
     by_source: dict[tuple, list] = defaultdict(list)
     for c in chunks:
-        if c.category == "card" and getattr(c, "rows", None):
+        if c.category == "card" and getattr(c, "rows", None) and not _is_traveller_anchor(c):
             by_source[(c.game, c.source)].append(c)
 
     index: dict[str, dict[str, Career]] = {}
@@ -213,7 +213,70 @@ def detect_careers(chunks) -> dict[str, dict[str, Career]]:
                     _merge_sections(game[key], career)  # e.g. add gear to a card
                 else:                                    # carrying req/rank/skills
                     game[key] = career
+
+    # Heading-anchored careers (Traveller): assemble each from the tables on its
+    # page range, keyed off the anchor cards the Traveller reconstructor emitted.
+    for game, careers in _traveller_career_index(chunks).items():
+        slot = index.setdefault(game, {})
+        for key, career in careers.items():
+            if key in slot:
+                _merge_sections(slot[key], career)
+            else:
+                slot[key] = career
     return index
+
+
+def _is_traveller_anchor(chunk) -> bool:
+    """A Traveller career anchor card: ``[[CAREER, name], [PAGE, n]]`` emitted by
+    the Traveller reconstructor (the career name + the page its spread starts on)."""
+    r = getattr(chunk, "rows", None)
+    return bool(
+        getattr(chunk, "category", "") == "card"
+        and r and len(r) == 2
+        and len(r[0]) >= 2 and r[0][0].strip().upper() == "CAREER"
+        and len(r[1]) >= 2 and r[1][0].strip().upper() == "PAGE"
+    )
+
+
+def _traveller_career_index(chunks) -> dict[str, dict[str, Career]]:
+    """Build heading-anchored careers: each anchor (name + start page) owns the
+    rules tables on its page range (up to the next career's page), which become the
+    career's sections (skills / ranks / mishaps / events)."""
+    from collections import defaultdict
+
+    anchors: dict[tuple, list] = defaultdict(list)   # (game, source) -> [(name, page)]
+    tables: dict[tuple, list] = defaultdict(list)    # (game, source) -> [(page, chunk)]
+    for c in chunks:
+        if _is_traveller_anchor(c):
+            try:
+                page = int(c.rows[1][1])
+            except (ValueError, IndexError):
+                continue
+            anchors[(c.game, c.source)].append((c.rows[0][1].strip(), page))
+        elif c.category == "tables" and getattr(c, "rows", None) and c.locator.startswith("p. "):
+            try:
+                tables[(c.game, c.source)].append((int(c.locator[3:]), c))
+            except ValueError:
+                continue
+
+    out: dict[str, dict[str, Career]] = {}
+    for key, careers in anchors.items():
+        game, source = key
+        careers.sort(key=lambda x: x[1])
+        src_tables = sorted(tables.get(key, []), key=lambda x: x[0])
+        for i, (name, page) in enumerate(careers):
+            end = careers[i + 1][1] if i + 1 < len(careers) else page + 2
+            secs = [
+                CareerSection(label=f"{(c.section.split('›')[-1].strip() or 'Table')} · p.{p}", rows=c.rows)
+                for p, c in src_tables
+                if page <= p < end
+            ]
+            if secs:
+                out.setdefault(game, {})[name.lower()] = Career(
+                    game=game, name=name, source=source,
+                    locator=f"p. {page}", sections=secs[:6],
+                )
+    return out
 
 
 def _section_key(label: str) -> str:

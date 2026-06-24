@@ -303,6 +303,40 @@ def _t2k_careers(page, page_no, existing) -> list[dict]:
     return _career_grids(page, page_no)
 
 
+# Career-page section markers — a Mongoose Traveller career spread carries these.
+_TRAV_CAREER_MARKERS = ("Qualification", "Survival", "Advancement", "Mishaps",
+                        "Events", "Skills and", "Ranks and", "Mustering")
+
+
+def _traveller_careers(page, page_no, existing) -> list[dict]:
+    """Traveller career *anchor*: Mongoose careers are heading-anchored (a big
+    career name over a 2-page spread of sub-tables), and the name often doesn't
+    survive into the Markdown. We detect the name from page geometry and emit a
+    one-per-career anchor card ``[[CAREER, name], [PAGE, n]]``; careers.py then
+    assembles each career from the skill/rank tables on its page range."""
+    text = page.get_text()
+    if sum(m in text for m in _TRAV_CAREER_MARKERS) < 2:
+        return []  # not a career spread (skip sourcebook/setting pages)
+    for b in page.get_text("dict").get("blocks", []):
+        for ln in b.get("lines", []):
+            spans = ln.get("spans", [])
+            txt = " ".join(s["text"] for s in spans).strip()
+            size = max((s["size"] for s in spans), default=0.0)
+            low = txt.lower()
+            if (
+                26 <= size <= 40
+                and 2 <= len(txt) <= 22
+                and txt.replace(" ", "").isalpha()
+                and not any(w in low for w in ("traveller", "creation", "skills", "tasks"))
+            ):
+                return [{
+                    "page": page_no,
+                    "title": txt.title(),
+                    "rows": [["CAREER", txt.title()], ["PAGE", str(page_no)]],
+                }]
+    return []
+
+
 # --- Source profiles (hybrid indexer; see lorehound/sources.py) -------------
 
 from . import sources  # noqa: E402
@@ -312,6 +346,13 @@ sources.register(
         name="Twilight 2000 (4E)",
         games=("twilight", "t2k", "2000"),
         reconstructors=[_t2k_careers],
+    )
+)
+sources.register(
+    sources.SourceProfile(
+        name="Traveller (Mongoose)",
+        games=("traveller",),
+        reconstructors=[_traveller_careers],
     )
 )
 
