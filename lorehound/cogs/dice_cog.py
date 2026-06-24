@@ -47,12 +47,13 @@ def _roll_card(interaction, expression, groups, modifier, total) -> discord.ui.L
     crit = any(abs(r) == g.sides for g in groups for r in g.rolls)
     fumble = any(abs(r) == 1 for g in groups for r in g.rolls)
 
-    lines = []
+    lines = [paint(f"{'DICE':<7} ROLLS", Ansi.BOLD, Ansi.CYAN)]
     for g in groups:
         sign = "−" if any(r < 0 for r in g.rolls) else ""
         label = f"{sign}{g.count}d{g.sides}"
         faces = "  ".join(_face(r, g.sides) for r in g.rolls)
-        lines.append(f"{label:<7} {faces}")
+        sub = f"  = {g.subtotal}" if g.count > 1 else ""
+        lines.append(f"{label:<7} {faces}{sub}")
     if modifier:
         lines.append(f"{'mod':<7} {modifier:+d}")
 

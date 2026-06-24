@@ -183,6 +183,48 @@ class TestTables(unittest.TestCase):
         self.assertEqual(chunks[0].section, "Player Characters › Stockpiles")
 
 
+class TestItemCard(unittest.TestCase):
+    def test_single_item_stat_card(self):
+        from lorehound.tables import render_item
+
+        rows = [["WEAPON", "DAMAGE", "ROF"], ["M82A1", "5", "5"], ["M16", "3", "4"]]
+        block, _wide, name = render_item(rows, "M82A1")
+        self.assertEqual(name, "M82A1")            # name → card header
+        self.assertIn("Stat", block)
+        self.assertIn("Value", block)
+        self.assertIn("DAMAGE", block)
+        self.assertNotIn("M16", block)             # only the matched item
+
+    def test_name_col_picks_alphabetic_not_longest(self):
+        from lorehound.tables import _name_col
+
+        # Short weapon codes (M16) must beat a wordier numeric column (RANGE "1500 m").
+        grid = [["WEAPON", "RANGE"], ["M16", "1500 m"], ["M82A1", "1800 m"]]
+        self.assertEqual(_name_col(grid), 0)
+
+    def test_item_falls_back_when_no_match(self):
+        from lorehound.tables import render_item
+
+        _block, _wide, name = render_item([["WEAPON", "DAMAGE"], ["M16", "3"]], "bazooka")
+        self.assertIsNone(name)
+
+
+class TestRelevanceCutoff(unittest.TestCase):
+    def test_min_rel_drops_weak_partials(self):
+        from lorehound.search_index import Chunk, SearchIndex
+
+        idx = SearchIndex()
+        idx.build([
+            Chunk("G", "S", "tables", "Ranged Fire Modifiers", "p1", "ranged fire modifiers"),
+            Chunk("G", "S", "tables", "Close Combat Modifiers", "p2", "close combat modifiers"),
+            Chunk("G", "S", "tables", "Foraging Modifiers", "p3", "foraging modifiers"),
+        ])
+        loose = idx.search("ranged fire modifiers", category="tables")
+        strict = idx.search("ranged fire modifiers", category="tables", min_rel=0.6)
+        self.assertLessEqual(len(strict), len(loose))
+        self.assertEqual(strict[0].chunk.section, "Ranged Fire Modifiers")
+
+
 class TestTableTopic(unittest.TestCase):
     """Topic grouping for the /table browser."""
 

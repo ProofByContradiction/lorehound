@@ -63,12 +63,13 @@ def _toks(s: str) -> set:
 
 
 def _name_col(grid: list[list[str]]) -> int:
-    """Index of the column holding row names — the first column with wordy values
-    (avg length > 4); short leading code columns (a roll/index) come before it."""
+    """Index of the column holding row names — the first column whose values are
+    mostly *alphabetic* (a name/label column), skipping leading roll/index columns
+    whose values are numeric (e.g. a D10). Short names like 'M16' still qualify."""
     ncols = len(grid[0]) if grid else 0
     for j in range(ncols):
         vals = [grid[r][j] for r in range(1, len(grid)) if j < len(grid[r]) and grid[r][j]]
-        if vals and sum(len(v) for v in vals) / len(vals) > 4:
+        if vals and sum(any(c.isalpha() for c in v) for v in vals) / len(vals) >= 0.5:
             return j
     return 0
 
@@ -251,14 +252,31 @@ def match_row(rows: list[list[str]], query: str) -> int | None:
     return best if score >= 0.6 else None
 
 
-def render_item(rows: list[list[str]], query: str) -> tuple[str, bool]:
-    """Single-item card when the query names one row of the table; otherwise the
-    whole table. The card reuses the vertical record renderer for [header, row]."""
+def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | None]:
+    """Single-item stat card when the query names one row of the table; otherwise
+    the whole table. Returns ``(block, wide, item_name)``.
+
+    The card is a 2-column ``Stat | Value`` table — each of the item's columns
+    becomes a row (the stat label on the left, its value on the right) — titled by
+    the item name (returned so the caller can use it as the card header).
+    ``item_name`` is None when no single row matched (whole-table fallback)."""
     grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
     r = match_row(grid, query)
     if r is None:
-        return render_table(rows)
+        block, wide = render_table(rows)
+        return block, wide, None
     ncols = max(len(grid[0]), len(grid[r]))
     header = grid[0] + [""] * (ncols - len(grid[0]))
     row = grid[r] + [""] * (ncols - len(grid[r]))
-    return _render_vertical([header, row]), False
+    name_col = _name_col([header, row])
+    name = row[name_col] if name_col < len(row) and row[name_col] else query
+    stats = [["Stat", "Value"]]
+    for j in range(ncols):
+        if j == name_col or not row[j]:
+            continue
+        stats.append([header[j] or "—", row[j]])
+    if len(stats) < 2:  # nothing but the name — fall back to the whole table
+        block, wide = render_table(rows)
+        return block, wide, None
+    block, _wide = _render_grid(stats, _BUDGET)
+    return block, False, name

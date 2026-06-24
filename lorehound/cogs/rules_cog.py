@@ -27,6 +27,20 @@ from ..tables import render_item, render_table
 TEAL = discord.Colour.dark_teal()
 GREEN = discord.Colour.green()
 
+# Per-category accent colours so each result type reads distinctly (like the dice
+# cards). Falls back to TEAL (used for mixed /lookup lists).
+_ACCENT = {
+    "rules": discord.Colour.blurple(),
+    "items": discord.Colour.gold(),
+    "transport": discord.Colour.blue(),
+    "tables": discord.Colour.green(),
+    "card": discord.Colour.dark_red(),
+}
+
+
+def _accent(category: str) -> discord.Colour:
+    return _ACCENT.get(category, TEAL)
+
 _NOT_CONFIGURED = (
     "📚 Google Drive isn't connected yet. Add your `DRIVE_FOLDER_ID` and Google "
     "service-account credentials (see the README), then run `/reindex`."
@@ -152,12 +166,14 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
     a source/page footnote. Reused by the inline detail and the public repost."""
     c = hit.chunk
     emoji, _ = _META.get(c.category, ("📖", ""))
-    title = ui.text(f"### {emoji} {(c.section or query)[:250]}")
+    heading = (c.section or query)[:250]
     if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
-        # For gear lookups, pull just the matching item's row as a card; for rules
-        # tables (and ambiguous gear queries) show the whole table.
+        # For gear lookups, pull just the matching item's row as a Stat|Value card
+        # titled by the item name; for rules tables show the whole table.
         if c.category in ("items", "transport"):
-            rendered, wide = render_item(c.rows, query)
+            rendered, wide, item_name = render_item(c.rows, query)
+            if item_name:  # matched a single item → use its name as the header
+                heading = item_name[:250]
         else:
             rendered, wide = render_table(c.rows)
         note = (
@@ -165,8 +181,9 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
             if wide
             else " — verify against the book for rulings."
         )
-        return [title, ui.separator(), ui.text(rendered[:4000]),
+        return [ui.text(f"### {emoji} {heading}"), ui.separator(), ui.text(rendered[:4000]),
                 ui.text(f"-# {_where(c)}{note}")]
+    title = ui.text(f"### {emoji} {heading}")
     body = " ".join(c.text.split())[:4000]
     return [title, ui.separator(), ui.text(body),
             ui.text(f"-# {_where(c)} — verify against the book for rulings.")]
@@ -175,10 +192,29 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
 def _public_detail_card(hit: SearchHit, query: str, user) -> discord.ui.LayoutView:
     """A non-interactive card reposting one result to the whole channel."""
     return ui.card(
-        ui.text(f"-# 📖 Shared by {user.display_name}"),
+        ui.header(f"-# 📢 Shared by **{user.display_name}**", icon_url=user.display_avatar.url),
         *_detail_items(hit, query),
-        accent=TEAL,
+        accent=_accent(hit.chunk.category),
     )
+
+
+async def _share_card(interaction: discord.Interaction, public_card) -> None:
+    """Share a result to the channel: post a clean standalone message (not a reply
+    tied to the interaction) and remove the private ephemeral lookup card."""
+    channel = interaction.channel
+    if channel is None:  # DM / no sendable channel — just post as the response
+        await interaction.response.send_message(view=public_card)
+        return
+    await interaction.response.defer()  # ack the button press
+    try:
+        await channel.send(view=public_card)  # standalone channel message
+    except discord.HTTPException as exc:
+        await interaction.followup.send(f"⚠️ Couldn't post that here: {exc}", ephemeral=True)
+        return
+    try:
+        await interaction.delete_original_response()  # remove the ephemeral card
+    except discord.HTTPException:
+        pass  # best-effort; the share already succeeded
 
 
 class ResultSelect(discord.ui.Select):
@@ -236,14 +272,9 @@ class ShowInChannelButton(discord.ui.Button):
                 ephemeral=True,
             )
             return
-        try:
-            await interaction.response.send_message(
-                view=_public_detail_card(self.selected_hit, self.query, interaction.user)
-            )
-        except discord.HTTPException as exc:
-            await interaction.response.send_message(
-                f"⚠️ Couldn't post that here: {exc}", ephemeral=True
-            )
+        await _share_card(
+            interaction, _public_detail_card(self.selected_hit, self.query, interaction.user)
+        )
 
 
 class ResultsView(discord.ui.LayoutView):
@@ -265,7 +296,10 @@ class ResultsView(discord.ui.LayoutView):
         self.query = query
         self.selected = selected
         self.badges = badges
-        container = discord.ui.Container(accent_colour=TEAL)
+        # Accent by the focused result's type (mixed /lookup lists keep TEAL).
+        focus = hits[selected] if selected is not None else (hits[0] if hits else None)
+        accent = TEAL if badges else (_accent(focus.chunk.category) if focus else TEAL)
+        container = discord.ui.Container(accent_colour=accent)
         if selected is None:
             container.add_item(ui.text(f"### {title}"))
             container.add_item(ui.text(subtitle))
@@ -340,9 +374,12 @@ def _career_items(career) -> list[discord.ui.Item]:
 
 def _public_career_card(career, user) -> discord.ui.LayoutView:
     return ui.card(
-        ui.text(f"-# {_CAREER_EMOJI} Shared by {user.display_name}"),
+        ui.header(
+            f"-# {_CAREER_EMOJI} Shared by **{user.display_name}**",
+            icon_url=user.display_avatar.url,
+        ),
         *_career_items(career),
-        accent=TEAL,
+        accent=_accent("card"),
     )
 
 
@@ -354,14 +391,7 @@ class CareerShareButton(discord.ui.Button):
         self.career = career
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        try:
-            await interaction.response.send_message(
-                view=_public_career_card(self.career, interaction.user)
-            )
-        except discord.HTTPException as exc:
-            await interaction.response.send_message(
-                f"⚠️ Couldn't post that here: {exc}", ephemeral=True
-            )
+        await _share_card(interaction, _public_career_card(self.career, interaction.user))
 
 
 class CareerView(discord.ui.LayoutView):
@@ -370,7 +400,7 @@ class CareerView(discord.ui.LayoutView):
     def __init__(self, career) -> None:
         super().__init__(timeout=180)
         self.career = career
-        container = discord.ui.Container(accent_colour=TEAL)
+        container = discord.ui.Container(accent_colour=_accent("card"))
         for item in _career_items(career):
             container.add_item(item)
         row = discord.ui.ActionRow()
@@ -604,7 +634,9 @@ class RulesCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        hits = self.rules.search(name, game=game, category="tables", top_k=8)
+        # Stricter relevance: a dominant exact match opens alone instead of dragging
+        # in tables that merely share a word (e.g. other "… Modifiers" tables).
+        hits = self.rules.search(name, game=game, category="tables", top_k=8, min_rel=0.6)
         if not hits:
             await interaction.response.send_message(
                 f"No tables matching **{name}** in **{game}**. "

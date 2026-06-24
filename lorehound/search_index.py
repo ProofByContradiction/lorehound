@@ -102,6 +102,7 @@ class SearchIndex:
         game: str | None = None,
         book: str | None = None,
         category: str | None = None,
+        min_rel: float | None = None,
     ) -> list[SearchHit]:
         if self.is_empty:
             return []
@@ -144,8 +145,11 @@ class SearchIndex:
 
         scored.sort(key=lambda h: h.score, reverse=True)
         # Drop the weak tail: passing mentions that score far below the clear top
-        # hit are noise, not rules about the query.
+        # hit are noise, not rules about the query. ``min_rel`` overrides the
+        # default fraction — e.g. /table passes a stricter one so a dominant exact
+        # match doesn't drag in tables that merely share a word ("…modifiers").
+        rel = self.REL_CUTOFF if min_rel is None else min_rel
         if scored:
-            cutoff = scored[0].score * self.REL_CUTOFF
+            cutoff = scored[0].score * rel
             scored = [h for h in scored if h.score >= cutoff]
         return scored[:top_k]

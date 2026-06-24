@@ -398,9 +398,10 @@ class RulesService:
         book: str | None = None,
         category: str | None = None,
         top_k: int = 5,
+        min_rel: float | None = None,
     ) -> list[SearchHit]:
         return self.index.search(
-            query, top_k=top_k, game=game, book=book, category=category
+            query, top_k=top_k, game=game, book=book, category=category, min_rel=min_rel
         )
 
     # --- Careers (/class) ---------------------------------------------------
