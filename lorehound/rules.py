@@ -396,6 +396,10 @@ def _is_catalog_name(name: str) -> bool:
         return False
     if re.match(r"^\d", name):  # "10,", "1DD", "4D", "2D% of crew ..."
         return False
+    if re.fullmatch(r"(?i)tl\s*\d+", name.strip()):  # "TL12" — an unnamed ship's tech level
+        return False
+    if re.search(r"\d{4,}", name):  # cost totals / serials ("Total: MCr 299798.6"), not names
+        return False
     if any(w in low for w in ("suffer", "reduced by", "destroyed", "checks to", " takes ", " dm-", " dm+")):
         return False
     if len(name.split()) > 6:  # a catalogue name is a noun phrase, not a sentence

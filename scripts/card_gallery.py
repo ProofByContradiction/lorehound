@@ -107,6 +107,16 @@ def main(argv: list[str]) -> int:
             lines.append(f"\n--- {item_name or name}  (from {c.section} · {c.locator}) ---")
             lines.append(_plain(block))
 
+        # /transport — vehicle/ship card per transport table (stat block or catalog row)
+        transports = [c for c in chunks if c.category == "transport" and len(c.rows) >= 2][:limit]
+        lines.append(f"\n=== TRANSPORT (one sample per table, {len(transports)} tables) ===")
+        for c in transports:
+            sample = next((r for r in c.rows[1:] if any(x.strip() for x in r)), None)
+            name = next((x for x in (sample or [""]) if x.strip()), "vehicle")
+            block, _wide, item_name = render_item(c.rows, name)
+            lines.append(f"\n--- {item_name or c.section}  (from {c.section} · {c.locator}) ---")
+            lines.append(_plain(block))
+
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines))
     print(f"[gallery] wrote {out_path} ({len(lines)} lines)")

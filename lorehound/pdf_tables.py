@@ -113,6 +113,15 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
     if alpha_cells < 2 and len(rows) < 3:
         return "noise"
 
+    # A full component stat block (first column Hull / Armour / M-Drive…) is a
+    # vehicle/ship wherever it sits — route it to /transport regardless of chapter
+    # (e.g. example ships in sourcebook chapters like "Exploration"). Construction
+    # option tables don't match (their rows are options, not systems).
+    from .tables import is_ship_statblock
+
+    if is_ship_statblock(rows):
+        return "transport"
+
     def has(*words: str) -> bool:  # whole-word match — "ROF" must not hit "pROFessor"
         return all(re.search(rf"\b{w}\b", hdr) for w in words)
 

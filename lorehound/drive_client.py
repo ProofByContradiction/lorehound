@@ -46,7 +46,7 @@ def _dominant_heading(page) -> str:
     if not cands:
         return ""
     cands.sort()
-    return re.sub(r"[A-Za-z']+", lambda m: m.group(0).capitalize(), cands[0][2])
+    return re.sub(r"[A-Za-z'’]+", lambda m: m.group(0).capitalize(), cands[0][2])
 
 # Read-only access is all we need.
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -60,7 +60,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v8-ship-names"
+TABLE_VERSION = "find-tables-lines-v9-ships-any-chapter"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
@@ -319,14 +319,11 @@ class DriveClient:
             title = t["title"]
             # A ship stat block's table title is just a tech-level header ("TL12");
             # its real name is the page's dominant heading ("SCOUT/COURIER"). Pull
-            # it so the ship is named in /transport and on its card.
-            if (
-                category == "transport"
-                and chap.upper() == "COMMON SPACECRAFT"
-                and is_ship_statblock(t["rows"])
-            ):
+            # it so the ship is named in /transport and on its card. (Any chapter —
+            # sourcebooks scatter example ships outside "Common Spacecraft".)
+            if category == "transport" and is_ship_statblock(t["rows"]):
                 head = _dominant_heading(doc.load_page(t["page"] - 1))
-                if head:
+                if head and head.upper() != chap.upper():  # not just the chapter title
                     title = head
             out.append(
                 {

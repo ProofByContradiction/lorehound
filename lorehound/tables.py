@@ -164,6 +164,22 @@ def _roll_key_col(grid: list[list[str]]) -> int | None:
     return 0 if head and _DIE_HDR.match(head[0].strip()) else None
 
 
+def _statblock_card(grid: list[list[str]]) -> tuple[str, bool]:
+    """Render a component stat block (rows *are* the stats — first column is a
+    label, no header row) as a Stat | Value card: col0 is the label, the rest of
+    the row joined is the value. Renders via _render_grid directly (not
+    render_table) so the 2-column result can't recurse back into detection."""
+    stats = [["Stat", "Value"]]
+    for row in grid:
+        label = row[0].strip()
+        value = " ".join(c.strip() for c in row[1:] if c.strip())
+        if label and value:
+            stats.append([label, value])
+    if len(stats) < 2:
+        return "", False
+    return _render_grid(stats, _BUDGET)
+
+
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     """Render a cell grid (first row = header) as a clean monospace table.
 
@@ -183,6 +199,13 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     ]
     if not grid:
         return "```\n(empty table)\n```", False
+    # A component stat block (e.g. a Traveller ship that landed in a non-spacecraft
+    # chapter) is the transpose of a table — render it as a Stat | Value card, not
+    # as wide reflowed records (which mangle it).
+    if is_ship_statblock(grid):
+        block, wide = _statblock_card(grid)
+        if block:
+            return block, wide
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
 
@@ -281,14 +304,8 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     # so render col0 as the label and the rest of the row as the value — no row to
     # match against. The ship name comes from the chunk's heading, not the grid.
     if is_ship_statblock(grid):
-        stats = [["Stat", "Value"]]
-        for row in grid:
-            label = row[0].strip()
-            value = " ".join(c.strip() for c in row[1:] if c.strip())
-            if label and value:
-                stats.append([label, value])
-        if len(stats) >= 2:
-            block, wide = render_table(stats)
+        block, wide = _statblock_card(grid)
+        if block:
             return block, wide, None
     # A single-item grid (header + one row, e.g. an exploded catalog pick) always
     # renders that item's card; otherwise match the query against the rows.
