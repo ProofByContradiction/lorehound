@@ -21,8 +21,8 @@ from discord.ext import commands
 
 from .. import ui
 from ..rules import RulesService, table_topic
-from ..search_index import SearchHit
-from ..tables import render_item, render_table
+from ..search_index import Chunk, SearchHit, tokenize
+from ..tables import _name_col, render_item, render_table
 
 TEAL = discord.Colour.dark_teal()
 GREEN = discord.Colour.green()
@@ -63,6 +63,47 @@ _LOOKUP_SKIP = {"reference"}
 def _badge(category: str) -> str:
     """The type emoji for a result category (used by /lookup's mixed list)."""
     return _META.get(category, ("📖", ""))[0]
+
+
+def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
+    """Expand catalog tables (weapon/vehicle lists) into one pickable entry per item
+    row — so a wide table becomes a name pick-list, each resolving to a Stat|Value
+    card. Each entry is scored by how well its name matches the query, so a uniquely
+    named lookup floats to the top (and opens directly). Non-table hits pass through."""
+    q_tokens = set(tokenize(query))
+    out: list[SearchHit] = []
+    seen: set[tuple] = set()
+    for h in hits:
+        rows = [[(c or "").strip() for c in r] for r in (h.chunk.rows or [])
+                if any((c or "").strip() for c in r)]
+        # Only explode genuine stat catalogs (wide, multi-row); leave narrow
+        # rules/feature tables as normal hits so they don't pollute the item list.
+        if len(rows) < 3 or len(rows[0]) < 5:
+            out.append(h)
+            continue
+        header = rows[0]
+        name_col = _name_col(rows)
+        table = h.chunk.section.split("›")[-1].strip()
+        for row in rows[1:]:
+            name = row[name_col].strip() if name_col < len(row) else ""
+            if not name:
+                continue
+            key = (h.chunk.source, name.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            name_tokens = set(tokenize(name))
+            score = (len(q_tokens & name_tokens) / len(q_tokens)) if q_tokens else 0.0
+            out.append(SearchHit(
+                chunk=Chunk(
+                    game=h.chunk.game, source=h.chunk.source, category=h.chunk.category,
+                    section=f"{table} › {name}" if table else name,
+                    locator=h.chunk.locator, text=name, rows=[header, row],
+                ),
+                score=score,
+            ))
+    out.sort(key=lambda x: x.score, reverse=True)
+    return out
 
 
 def _resolve_game(rules: RulesService, source: str) -> str | None:
@@ -460,6 +501,7 @@ class RulesCog(commands.Cog):
                 )
                 return
 
+        selected = None
         if category is None:
             # Unified search: over-fetch, drop the reference index, badge by type.
             hits = self.rules.search(query, game=game, book=chosen_book, top_k=12)
@@ -471,6 +513,13 @@ class RulesCog(commands.Cog):
             )
             emoji, label = _META[category]
             badges = False
+            if category in ("items", "transport") and hits:
+                # A weapon/vehicle catalog is a list of items, not one wide grid:
+                # explode it into a per-item pick-list → Stat|Value cards. A single
+                # clearly-named match opens its card directly.
+                hits = _explode_to_items(hits, query)[:25]
+                if sum(1 for h in hits if h.score >= 0.6) == 1 and hits[0].score >= 0.6:
+                    selected = 0
         scope = f"**{game}**" + (f" › **{chosen_book}**" if chosen_book else "")
         if not hits:
             await interaction.response.send_message(
@@ -479,11 +528,17 @@ class RulesCog(commands.Cog):
             )
             return
 
+        noun = "item" if category in ("items", "transport") else "match"
+        subtitle = (
+            f"in {scope} — **{len(hits)}** {noun}{'es' if noun == 'match' else 's'}. "
+            "Pick one to read:"
+        )
         view = ResultsView(
             hits,
             query,
             title=f"{emoji} {label}: {query}",
-            subtitle=f"in {scope} — **{len(hits)}** matches. Pick one to read:",
+            subtitle=subtitle,
+            selected=selected,
             badges=badges,
         )
         await interaction.response.send_message(view=view, ephemeral=True)

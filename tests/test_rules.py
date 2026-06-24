@@ -202,6 +202,42 @@ class TestClassifyAndCategory(unittest.TestCase):
         rows = [["WEAPON", "DAMAGE", "ROF", "REL"], ["M16", "3", "5", "5"]]
         self.assertEqual(classify_table("Weapons", rows), "items")
 
+    def test_vehicle_table_is_transport_despite_weapon_column(self):
+        from lorehound.pdf_tables import classify_table
+
+        # A vehicle carries a MAIN WEAPON + REL column, but it's transport, not a
+        # weapon catalogue — the VEHICLE signal must win first.
+        rows = [["VEHICLE", "TYPE", "REL", "MAIN WEAPON", "PRICE"],
+                ["M1 Abrams", "MBT", "5", "105mm", "900,000"]]
+        self.assertEqual(classify_table("Weapons, Vehicles & Gear", rows), "transport")
+
+
+class TestExplodeToItems(unittest.TestCase):
+    def test_catalog_explodes_to_per_item_picks(self):
+        from lorehound.cogs.rules_cog import _explode_to_items
+        from lorehound.search_index import Chunk, SearchHit
+
+        table = Chunk("T2K", "Core", "transport", "US Vehicles", "p. 121", "veh",
+                      rows=[["VEHICLE", "TYPE", "REL", "ARMOR", "WEAPON"],
+                            ["M1 Abrams", "MBT", "5", "11", "105mm"],
+                            ["M151", "Car", "5", "1", "–"]])
+        items = _explode_to_items([SearchHit(chunk=table, score=10.0)], "M1 Abrams")
+        names = [h.chunk.section.split("›")[-1].strip() for h in items]
+        self.assertIn("M1 Abrams", names)
+        self.assertIn("M151", names)
+        self.assertEqual(names[0], "M1 Abrams")        # query match floats to top
+        self.assertGreaterEqual(items[0].score, 0.6)   # → opens directly
+
+    def test_narrow_table_not_exploded(self):
+        from lorehound.cogs.rules_cog import _explode_to_items
+        from lorehound.search_index import Chunk, SearchHit
+
+        small = Chunk("T2K", "Core", "transport", "Vehicle Features", "p. 90", "x",
+                      rows=[["FEATURE", "EFFECT"], ["4WD", "off-road"]])
+        out = _explode_to_items([SearchHit(chunk=small, score=5.0)], "4wd")
+        self.assertEqual(len(out), 1)                  # kept as-is, not exploded
+        self.assertEqual(out[0].chunk.section, "Vehicle Features")
+
     def test_chargen_gear_prose_is_rules_not_items(self):
         from lorehound.rules import _category
 
@@ -234,8 +270,17 @@ class TestItemCard(unittest.TestCase):
     def test_item_falls_back_when_no_match(self):
         from lorehound.tables import render_item
 
-        _block, _wide, name = render_item([["WEAPON", "DAMAGE"], ["M16", "3"]], "bazooka")
+        # 3+ row table with no matching row → whole-table fallback (no item name).
+        rows = [["WEAPON", "DAMAGE"], ["M16", "3"], ["AK-47", "4"]]
+        _block, _wide, name = render_item(rows, "bazooka")
         self.assertIsNone(name)
+
+    def test_single_item_grid_always_renders(self):
+        from lorehound.tables import render_item
+
+        # An exploded pick is header + one row → always its card, any query.
+        _block, _wide, name = render_item([["WEAPON", "DAMAGE"], ["M16", "3"]], "zzz")
+        self.assertEqual(name, "M16")
 
 
 class TestRelevanceCutoff(unittest.TestCase):

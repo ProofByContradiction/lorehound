@@ -255,7 +255,9 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     the item name (returned so the caller can use it as the card header).
     ``item_name`` is None when no single row matched (whole-table fallback)."""
     grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
-    r = match_row(grid, query)
+    # A single-item grid (header + one row, e.g. an exploded catalog pick) always
+    # renders that item's card; otherwise match the query against the rows.
+    r = 1 if len(grid) == 2 else match_row(grid, query)
     if r is None:
         block, wide = render_table(rows)
         return block, wide, None

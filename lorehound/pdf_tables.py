@@ -74,6 +74,10 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
     # as a weapon via the 'ROF' substring.
     if hdr.startswith("CAREER") or has("LAST", "CAREER") or "SPECIALTY (D6)" in hdr:
         return "card"
+    # Vehicle stat blocks BEFORE weapons: a vehicle table carries a MAIN WEAPON +
+    # REL column, so it would otherwise be mis-read as a weapon catalogue.
+    if has("VEHICLE") or "COMBAT SPEED" in hdr:
+        return "transport"
     # Weapons / gear stat blocks.
     if has("ROF") or has("AMMO", "REL"):
         return "items"
@@ -85,9 +89,6 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
         return "items"
     if has("WEAPON") and some("DAMAGE", "REL"):
         return "items"
-    # Vehicle stat blocks.
-    if has("VEHICLE") or "COMBAT SPEED" in hdr:
-        return "transport"
     if has("FUEL") and some("ARMOR", "ARMOUR", "SPEED"):
         return "transport"
     _KNOWN = (
