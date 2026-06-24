@@ -183,6 +183,30 @@ class TestTables(unittest.TestCase):
         self.assertEqual(chunks[0].section, "Player Characters › Stockpiles")
 
 
+class TestClassifyAndCategory(unittest.TestCase):
+    def test_career_with_professor_column_is_card(self):
+        from lorehound.pdf_tables import classify_table
+
+        # "PROFESSOR" contains the substring "ROF" — must NOT read as a weapon.
+        rows = [["CAREER", "DOCTOR", "PROFESSOR", "MANAGER"], ["REQUIREMENTS", "a", "b", "c"]]
+        self.assertEqual(classify_table("Player Characters", rows), "card")
+
+    def test_real_weapon_table_still_items(self):
+        from lorehound.pdf_tables import classify_table
+
+        rows = [["WEAPON", "DAMAGE", "ROF", "REL"], ["M16", "3", "5", "5"]]
+        self.assertEqual(classify_table("Weapons", rows), "items")
+
+    def test_chargen_gear_prose_is_rules_not_items(self):
+        from lorehound.rules import _category
+
+        # A "GEAR" section under a character-creation chapter is chargen, not gear.
+        self.assertEqual(_category("Core.pdf", "Player Characters", "GEAR"), "rules")
+        self.assertEqual(_category("Core.pdf", "02. Player Characters", "AMMUNITION"), "rules")
+        # …but a real gear chapter is still items.
+        self.assertEqual(_category("Core.pdf", "Weapons, Vehicles & Gear", "US Weapons"), "items")
+
+
 class TestItemCard(unittest.TestCase):
     def test_single_item_stat_card(self):
         from lorehound.tables import render_item

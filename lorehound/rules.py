@@ -111,8 +111,21 @@ def table_topic(chapter: str, name: str) -> str:
     )
 
 
+# Character-creation chapters: their "GEAR" / "AMMUNITION" / "ENCUMBRANCE" sub-
+# sections are chargen *rules* (how to record/choose gear), not an item catalogue,
+# and their prose mentions weapons ("…Assault rifle…") — so the gear/weapon
+# signals below would wrongly route them to /item. Guarded as rules.
+_CHARGEN = re.compile(
+    r"\b(player character|character (?:creation|generation)|traveller creation|"
+    r"life ?path|childhood|archetype)",
+    re.I,
+)
+
+
 def _category(book: str, chapter: str, section: str) -> str:
     """Classify as 'rules', 'items', or 'transport' from the most specific heading."""
+    if _CHARGEN.search(chapter or "") or _CHARGEN.search(book or ""):
+        return "rules"  # character-creation content is chargen rules, not gear
     for text in (section, chapter, book):
         if not text:
             continue
@@ -269,6 +282,14 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
         if key and key in section_cat:
             ch.category = section_cat[key]
 
+    # Character-creation prose must not land in /item or /transport even when the
+    # content re-tag above flagged it (its gear/weapon mentions are chargen, not a
+    # catalogue) — force it back to rules.
+    for ch in chunks:
+        chapter = ch.section.split("›")[0].strip() if ch.section else ""
+        if ch.category in ("items", "transport") and _CHARGEN.search(chapter):
+            ch.category = "rules"
+
     # Keep the book's alphabetical index and leftover page-footer fragments out
     # of rule lookups: a single-letter section leaf, or a long number-dense chunk,
     # is reference clutter, not a rule. Retag so /rule|/item|/transport skip it.
@@ -328,6 +349,8 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     card→'card' — tag it with a "Chapter › Name" breadcrumb, and keep the cell
     grid for aligned rendering.
     """
+    from .pdf_tables import classify_table
+
     game, book = _split_game_and_file(path)
     cat_map = {
         "rules": "tables",
@@ -344,11 +367,16 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
         chapter = (t.get("chapter") or "").strip()
         section = f"{chapter} › {name}" if chapter else name
         flat = "\n".join(" ".join(c for c in r if c) for r in rows)
+        # Re-run classification at index time (not the cached category) so routing
+        # fixes apply on a rebuild without re-extracting every PDF.
+        category = classify_table(chapter, rows)
+        if category == "noise":
+            continue
         chunks.append(
             Chunk(
                 game=game,
                 source=book,
-                category=cat_map.get(t.get("category", "rules"), "tables"),
+                category=cat_map.get(category, "tables"),
                 section=section,
                 locator=f"p. {t['page']}" if t.get("page") else "",
                 text=f"{name}\n{flat}",

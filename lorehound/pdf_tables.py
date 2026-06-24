@@ -12,6 +12,7 @@ wrapped multi-line cells and shaded rows the band detector skips).
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 
 
@@ -62,25 +63,33 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
     alpha_cells = sum(1 for c in rows[0] if any(ch.isalpha() for ch in c))
     if alpha_cells < 2 and len(rows) < 3:
         return "noise"
+
+    def has(*words: str) -> bool:  # whole-word match — "ROF" must not hit "pROFessor"
+        return all(re.search(rf"\b{w}\b", hdr) for w in words)
+
+    def some(*words: str) -> bool:
+        return any(re.search(rf"\b{w}\b", hdr) for w in words)
+
+    # Career / archetype cards FIRST: a 'PROFESSOR' career column must not be read
+    # as a weapon via the 'ROF' substring.
+    if hdr.startswith("CAREER") or has("LAST", "CAREER") or "SPECIALTY (D6)" in hdr:
+        return "card"
     # Weapons / gear stat blocks.
-    if "ROF" in hdr or ("AMMO" in hdr and "REL" in hdr):
+    if has("ROF") or has("AMMO", "REL"):
         return "items"
-    if "DAMAGE" in hdr and "CRIT" in hdr and "BLAST" in hdr:
+    if has("DAMAGE", "CRIT", "BLAST"):
         return "items"
-    if "CALIBER" in hdr and ("WEIGHT" in hdr or "PRICE" in hdr):
+    if has("CALIBER") and some("WEIGHT", "PRICE"):
         return "items"
-    if "ARMOR" in hdr and "LOCATION" in hdr:
+    if some("ARMOR", "ARMOUR") and has("LOCATION"):
         return "items"
-    if "WEAPON" in hdr and ("DAMAGE" in hdr or "REL" in hdr):
+    if has("WEAPON") and some("DAMAGE", "REL"):
         return "items"
     # Vehicle stat blocks.
-    if "VEHICLE" in hdr or "COMBAT SPEED" in hdr:
+    if has("VEHICLE") or "COMBAT SPEED" in hdr:
         return "transport"
-    if "FUEL" in hdr and ("ARMOR" in hdr or "SPEED" in hdr):
+    if has("FUEL") and some("ARMOR", "ARMOUR", "SPEED"):
         return "transport"
-    # Career / archetype cards (character creation).
-    if hdr.startswith("CAREER") or "LAST CAREER" in hdr or "SPECIALTY (D6)" in hdr:
-        return "card"
     _KNOWN = (
         "ATTRIBUTE", "SKILL LEVEL", "TARGET LEVEL", "2D6+PCS", "UNIT DURATION",
         "US SOVIET", "LEVEL DIE", "ATTRIBUTE/",
