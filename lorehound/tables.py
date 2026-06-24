@@ -27,6 +27,10 @@ _MIN_COL = 3
 _MAX_COL = 40           # a single column only wraps past this many characters
 _REPEAT_MIN = 25        # tables longer than this re-print the header as you scroll
 _REPEAT_EVERY = 18      # …every this many body rows (pseudo-sticky header)
+# A 3+ column table wider than this (after squeezing) can't fit a phone — ANSI
+# code blocks squish, they don't side-scroll on Discord mobile — so it renders as
+# reflowing markdown records instead. Narrower tables stay crisp ANSI columns.
+_MOBILE_GRID_MAX = 42
 
 # A die-roll column header: "D10", "2D6", "1D", "D66", "D100", or "Roll".
 _DIE_HDR = re.compile(r"(?i)^(roll|\d*d\d+|\d*d)$")
@@ -72,43 +76,63 @@ def _name_col(grid: list[list[str]]) -> int:
     return 0
 
 
+def _label(s: str) -> str:
+    """Tidy a column header for use as an inline field label: title-case ALL-CAPS
+    words but keep short acronyms ("ROF" stays "ROF", "TIME LIMIT" -> "Time Limit")."""
+    out = []
+    for w in s.split():
+        if w.isupper() and w.isalpha() and len(w) <= 3:
+            out.append(w)
+        elif w.isupper():
+            out.append(w.title())
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
 def _render_vertical(grid: list[list[str]]) -> str:
-    """Render a (wide) table as one vertical record per row — ``**Label:** value``
-    pairs that wrap to the screen, so nothing overflows on mobile. Markdown (not a
-    code block) so Discord reflows it to the viewport width. With a single data row
-    this is the single-item gear card."""
+    """Render a (too-wide-for-a-phone) table as reflowing markdown records — the
+    only mobile-safe option for wide data (Discord wraps markdown, not code blocks).
+
+    A roll/outcome table (leading die column) gets a ``**Die** (D10)`` header and
+    leads each record with the roll value in a monospaced left column; the primary
+    name is bold and the remaining columns become ``**Label:** value`` fields."""
     header = grid[0]
     ncols = len(header)
     name_col = _name_col(grid)
+    has_roll = name_col > 0  # leading code/roll columns precede the name column
+
+    caption, pad = "", 1
+    if has_roll:
+        die_hdr = header[0].strip()
+        m = re.search(r"\(([^)]+)\)", die_hdr)  # "Roll (D10)" -> "D10"
+        caption = f"**Die** *({m.group(1) if m else (die_hdr or 'Die')})*"
+        pad = max(
+            (len(" ".join(grid[r][j] for j in range(name_col) if j < len(grid[r]) and grid[r][j]))
+             for r in range(1, len(grid))),
+            default=1,
+        )
+
     blocks = []
     for r in range(1, len(grid)):
         row = grid[r]
-        # Leading short "code" columns (e.g. a D10 roll) become a labeled lead line
-        # ("D10 6"); the name column + the rest go in the body ("everything else").
-        codes = [
-            (f"{header[j]} {row[j]}".strip() if header[j] else row[j])
-            for j in range(name_col)
-            if row[j]
-        ]
-        body = []
+        roll = " ".join(row[j] for j in range(name_col) if j < len(row) and row[j])
         name = row[name_col] if name_col < len(row) else ""
-        if name:
-            body.append(f"**{name}**")
-        body += [
-            f"**{header[j]}:** {row[j]}" if header[j] else row[j]
+        fields = [
+            f"**{_label(header[j])}:** {row[j]}" if header[j] else row[j]
             for j in range(name_col + 1, ncols)
-            if row[j]
+            if j < len(row) and row[j]
         ]
-        if codes:  # roll/index table: dice header+number leads, everything else below
-            block = "**" + " · ".join(codes) + "**"
-            if body:
-                block += "\n" + "  ·  ".join(body)
-        else:  # name itself is the lead (e.g. a weapon/gear card)
-            block = body[0] if body else "**—**"
-            if body[1:]:
-                block += "\n" + "  ·  ".join(body[1:])
-        blocks.append(block)
-    return "\n\n".join(blocks)
+        if has_roll:
+            lead = f"`{roll.ljust(pad)}` **{name}**" if name else f"`{roll.ljust(pad)}`"
+        else:
+            lead = f"**{name}**" if name else ""
+        block = lead
+        if fields:
+            block += ("\n" if lead else "") + " · ".join(fields)
+        blocks.append(block or "—")
+    body = "\n\n".join(blocks)
+    return f"{caption}\n\n{body}" if caption else body
 
 
 def _roll_key_col(grid: list[list[str]]) -> int | None:
@@ -118,21 +142,17 @@ def _roll_key_col(grid: list[list[str]]) -> int | None:
     return 0 if head and _DIE_HDR.match(head[0].strip()) else None
 
 
-# Beyond this compact width even a columnar layout is unreadable, so fall back to
-# vertical per-row records (a last resort, not the default).
-_VERTICAL_MAX = 116
-
-
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     """Render a cell grid (first row = header) as a clean monospace table.
 
-    Real columns are kept — a roll/damage table shows its sub-headers (Lethal,
-    Effects, …) as columns rather than collapsing them — and spacing is squeezed
-    (single-space gaps, internal whitespace collapsed) so wider tables still fit.
-    Only genuinely huge tables fall back to vertical records.
+    **Width decides format** (Discord mobile squishes wide code blocks rather than
+    side-scrolling, so we can't rely on scroll): a table that fits a phone renders
+    as crisp ANSI columns; a wider 3+ column table reflows into markdown records —
+    a bold lead (roll · name) plus ``**Label:** value`` fields — which Discord
+    wraps to the viewport. Spacing is squeezed (single-space gaps, collapsed cell
+    whitespace) so more tables stay columnar.
 
-    Returns ``(code_block, wide)`` — ``wide`` flags tables likely to scroll
-    sideways on a narrow (mobile) screen.
+    Returns ``(code_block_or_records, wide)``.
     """
     grid = [
         [" ".join((c or "").split()) for c in r]  # strip + collapse internal whitespace
@@ -144,7 +164,8 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
 
-    # Relabel a leading die column "Roll (Dn)" but keep the rest as columns.
+    # Relabel a leading die column "Roll (Dn)" (used by the columnar path; the
+    # records path leads with the roll value instead).
     roll_idx = _roll_key_col(grid)
     if roll_idx is not None:
         die = grid[0][roll_idx]
@@ -152,7 +173,7 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
 
     natural = [max((len(grid[r][j]) for r in range(len(grid))), default=0) for j in range(ncols)]
     compact = sum(min(n, _MAX_COL) for n in natural) + len(_GAP) * (ncols - 1)
-    if ncols >= 4 and compact > _VERTICAL_MAX:
+    if ncols >= 3 and compact > _MOBILE_GRID_MAX:
         return _render_vertical(grid), False
     return _render_grid(grid, _BUDGET)
 

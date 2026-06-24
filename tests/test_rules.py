@@ -126,7 +126,7 @@ class TestTables(unittest.TestCase):
         _out, wide = render_table(rows)
         self.assertTrue(wide)  # >= 6 columns may scroll on mobile
 
-    def test_wide_roll_table_keeps_subheader_columns(self):
+    def test_wide_roll_table_reflows_to_records(self):
         from lorehound.tables import render_table
 
         rows = [
@@ -135,12 +135,20 @@ class TestTables(unittest.TestCase):
             ["10", "Severed leg", "Yes", "Stretch", "Cannot run", "Permanent"],
         ]
         out, _wide = render_table(rows)
-        self.assertIn("Roll (D10)", out)     # die column relabeled
-        self.assertIn("LETHAL", out)         # sub-headers KEPT as columns
-        self.assertIn("EFFECTS", out)
-        self.assertIn("Crushed toes", out)
-        self.assertNotIn("Lethal: No", out)  # not collapsed into one Results cell
-        self.assertNotIn("D10 1", out)       # not the old dice-lead format
+        self.assertNotIn("```", out)            # records (markdown), not a code block
+        self.assertIn("**Die**", out)           # die header denotes the roll
+        self.assertIn("(D10)", out)
+        self.assertIn("**Lethal:**", out)       # bold sub-header labels
+        self.assertIn("Crushed toes", out)      # the row's primary name
+        self.assertIn("`1 `", out)              # roll value in a monospaced column
+
+    def test_narrow_roll_table_stays_ansi_columns(self):
+        from lorehound.tables import render_table
+
+        rows = [["D6", "HIT LOCATION"], ["1", "Legs"], ["2-4", "Torso"], ["6", "Head"]]
+        out, _wide = render_table(rows)
+        self.assertIn("```ansi", out)           # crisp ANSI columns (fits a phone)
+        self.assertIn("Roll (D6)", out)         # die column relabeled
 
     def test_tables_for_doc_routes_by_category(self):
         from lorehound.rules import _tables_for_doc
