@@ -18,7 +18,7 @@ _WORD = re.compile(r"[a-z0-9]+")
 _ESC = "\x1b"
 _HEAD = f"{_ESC}[1;36m"  # bold cyan header row
 _RESET = f"{_ESC}[0m"
-_GAP = "   "             # column separator (3 spaces)
+_GAP = " "               # column separator — a single space (save horizontal width)
 # Prefer single-line rows: a generous width ceiling so cells wrap only when a table
 # is genuinely too wide. Discord code blocks scroll horizontally, so wide-but-
 # single-line beats narrow-but-wrapped for legibility.
@@ -27,8 +27,6 @@ _MIN_COL = 3
 _MAX_COL = 40           # a single column only wraps past this many characters
 _REPEAT_MIN = 25        # tables longer than this re-print the header as you scroll
 _REPEAT_EVERY = 18      # …every this many body rows (pseudo-sticky header)
-_MOBILE_GRID_MAX = 42   # wider 3+ column tables render as vertical records (mobile-safe)
-_MOBILE_BUDGET = 46     # narrow width budget for the 2-col "Roll (Dn) | Results" table
 
 # A die-roll column header: "D10", "2D6", "1D", "D66", "D100", or "Roll".
 _DIE_HDR = re.compile(r"(?i)^(roll|\d*d\d+|\d*d)$")
@@ -113,55 +111,31 @@ def _render_vertical(grid: list[list[str]]) -> str:
     return "\n\n".join(blocks)
 
 
-def _label(header_cell: str) -> str:
-    """Inline label for a result column ("HEAL TIME" -> "Heal Time")."""
-    h = header_cell.strip()
-    return h.title() if h.isupper() else h
-
-
 def _roll_key_col(grid: list[list[str]]) -> int | None:
     """Index of a leading die-roll column (header like ``D10`` / ``2D6`` / ``Roll``),
-    else None. Such a table reads as roll → result, so it renders keyed on the roll."""
+    else None. We relabel it ``Roll (Dn)`` but keep every other column."""
     head = grid[0] if grid else []
     return 0 if head and _DIE_HDR.match(head[0].strip()) else None
 
 
-def _render_roll_table(grid: list[list[str]], roll_idx: int) -> tuple[str, bool]:
-    """Render a wide roll table as a 2-column ``Roll (Dn) | Results`` table: the die
-    value keys each row, and the remaining columns collapse into one wrapped
-    ``Results`` cell (the name column leads; other columns are labelled). This stays
-    narrow — two columns that wrap — so it never overflows a mobile screen."""
-    header = grid[0]
-    ncols = len(header)
-    name_col = _name_col(grid)
-    die = header[roll_idx].strip()
-    key_hdr = die if die.lower() == "roll" else f"Roll ({die})"
-    out = [[key_hdr, "Results"]]
-    for r in grid[1:]:
-        roll = r[roll_idx] if roll_idx < len(r) else ""
-        parts = []
-        if name_col != roll_idx and name_col < len(r) and r[name_col]:
-            parts.append(r[name_col])  # the primary result leads, unlabelled
-        for j in range(ncols):
-            if j in (roll_idx, name_col):
-                continue
-            v = r[j] if j < len(r) else ""
-            if v:
-                lbl = _label(header[j])
-                parts.append(f"{lbl}: {v}" if lbl else v)
-        out.append([roll, " · ".join(parts)])
-    block, _wide = _render_grid(out, _MOBILE_BUDGET)
-    return block, False
+# Beyond this compact width even a columnar layout is unreadable, so fall back to
+# vertical per-row records (a last resort, not the default).
+_VERTICAL_MAX = 116
 
 
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     """Render a cell grid (first row = header) as a clean monospace table.
 
+    Real columns are kept — a roll/damage table shows its sub-headers (Lethal,
+    Effects, …) as columns rather than collapsing them — and spacing is squeezed
+    (single-space gaps, internal whitespace collapsed) so wider tables still fit.
+    Only genuinely huge tables fall back to vertical records.
+
     Returns ``(code_block, wide)`` — ``wide`` flags tables likely to scroll
     sideways on a narrow (mobile) screen.
     """
     grid = [
-        [(c or "").strip() for c in r]
+        [" ".join((c or "").split()) for c in r]  # strip + collapse internal whitespace
         for r in rows
         if any((c or "").strip() for c in r)
     ]
@@ -170,17 +144,16 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
 
-    # Mobile can't horizontally scroll a code block (the swipe is hijacked, and wide
-    # tables just squish). A wide *roll* table reads as roll → result, so it renders
-    # as a narrow 2-column "Roll (Dn) | Results" table; other wide tables become
-    # vertical per-row records. Both wrap to the screen instead of overflowing.
-    natural = [max((len(grid[r][j]) for r in range(len(grid))), default=0) for j in range(ncols)]
-    if ncols >= 3 and sum(natural) + len(_GAP) * (ncols - 1) > _MOBILE_GRID_MAX:
-        roll_idx = _roll_key_col(grid)
-        if roll_idx is not None:
-            return _render_roll_table(grid, roll_idx)
-        return _render_vertical(grid), False
+    # Relabel a leading die column "Roll (Dn)" but keep the rest as columns.
+    roll_idx = _roll_key_col(grid)
+    if roll_idx is not None:
+        die = grid[0][roll_idx]
+        grid[0][roll_idx] = die if die.lower().startswith("roll") else f"Roll ({die})"
 
+    natural = [max((len(grid[r][j]) for r in range(len(grid))), default=0) for j in range(ncols)]
+    compact = sum(min(n, _MAX_COL) for n in natural) + len(_GAP) * (ncols - 1)
+    if ncols >= 4 and compact > _VERTICAL_MAX:
+        return _render_vertical(grid), False
     return _render_grid(grid, _BUDGET)
 
 
