@@ -400,7 +400,7 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
         if c.category not in ("items", "transport") or not c.rows:
             continue
         rows = [[(x or "").strip() for x in r] for r in c.rows if any((x or "").strip() for x in r)]
-        if len(rows) < 3 or len(rows[0]) < 5:
+        if len(rows) < 3 or len(rows[0]) < 4:
             continue
         nc = _name_col(rows)
         for r in rows[1:]:

@@ -76,9 +76,9 @@ def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
     for h in hits:
         rows = [[(c or "").strip() for c in r] for r in (h.chunk.rows or [])
                 if any((c or "").strip() for c in r)]
-        # Only explode genuine stat catalogs (wide, multi-row); leave narrow
-        # rules/feature tables as normal hits so they don't pollute the item list.
-        if len(rows) < 3 or len(rows[0]) < 5:
+        # Only explode genuine stat catalogs (multi-row, several columns); leave
+        # narrow rules/feature tables as normal hits so they don't pollute the list.
+        if len(rows) < 3 or len(rows[0]) < 4:
             out.append(h)
             continue
         header = rows[0]
