@@ -14,8 +14,8 @@ structure + the registry, so it stays free of any heavy/fitz dependency.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 # A reconstructor: (page, page_no, tables_so_far) -> list of extra table dicts
 # ({"page", "title", "rows"}). It may inspect what the generic pass already found

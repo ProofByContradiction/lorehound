@@ -1,0 +1,23 @@
+# Ruff lint config for Lorehound. Ruff is dev/CI-only (see requirements-dev.txt)
+# and never ships in the bot runtime. Run locally with:  .venv/bin/ruff check .
+# The pre-commit hook (.githooks/pre-commit) and CI (.github/workflows/lint.yml)
+# both enforce this.
+line-length = 120
+target-version = "py312"
+# Agent worktrees are full repo copies; never lint them as part of the main tree.
+extend-exclude = [".claude"]
+
+[lint]
+# pyflakes (F), pycodestyle errors+warnings (E/W), isort (I), pyupgrade (UP),
+# bugbear (B), comprehensions (C4) — a practical modern set that catches real
+# bugs (undefined names, blind bare-excepts, raise-without-from) without fighting
+# the codebase's deliberate style.
+select = ["E", "W", "F", "I", "UP", "B", "C4"]
+ignore = [
+    "E741",  # ambiguous variable name "l" — used for short-lived line/loop vars
+]
+
+[lint.per-file-ignores]
+# Scripts prepend the repo root to sys.path before importing lorehound.*, so the
+# imports legitimately come after that statement.
+"scripts/*" = ["E402"]

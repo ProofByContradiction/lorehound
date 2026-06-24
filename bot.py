@@ -149,7 +149,7 @@ def main() -> None:
     try:
         config = Config.load()
     except ConfigError as exc:
-        raise SystemExit(f"Configuration error: {exc}")
+        raise SystemExit(f"Configuration error: {exc}") from exc
 
     bot = Lorehound(config)
     bot.run(config.discord_token, log_handler=None)

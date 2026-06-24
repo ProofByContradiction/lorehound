@@ -83,7 +83,7 @@ class SkillRollResult:
     dice: list[DieOutcome]
     successes: int  # from the attribute + skill dice (the attack roll itself)
     ones: int
-    ammo: "AmmoRollResult | None" = None  # optional ammo dice rolled with the attack
+    ammo: AmmoRollResult | None = None  # optional ammo dice rolled with the attack
 
     @property
     def succeeded(self) -> bool:

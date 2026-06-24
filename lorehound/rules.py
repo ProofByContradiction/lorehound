@@ -269,7 +269,7 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
     # Refine: a section containing a weapon/vehicle stat table is gear/vehicles.
     # Propagate to every chunk in that section so the prose write-ups move too.
     section_cat: dict[str, str] = {}
-    for ch, key in zip(chunks, sec_keys):
+    for ch, key in zip(chunks, sec_keys, strict=True):
         sig = _content_category(ch.text)
         if not sig:
             continue
@@ -278,7 +278,7 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
                 section_cat[key] = sig
         else:
             ch.category = sig
-    for ch, key in zip(chunks, sec_keys):
+    for ch, key in zip(chunks, sec_keys, strict=True):
         if key and key in section_cat:
             ch.category = section_cat[key]
 

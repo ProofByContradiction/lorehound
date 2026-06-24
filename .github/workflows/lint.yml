@@ -1,0 +1,24 @@
+name: lint
+
+# Runs the Ruff linter on every push/PR so style regressions and real defects
+# (undefined names, blind bare-excepts, raise-without-from) are caught alongside
+# the unit-test and security-audit workflows. Config lives in ruff.toml.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Ruff
+        # Ruff is a standalone static analyzer — it needs neither the runtime
+        # deps nor any credentials, so the lint job stays fast.
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run Ruff
+        run: ruff check --output-format=github .

@@ -116,11 +116,9 @@ def run_eval(service, gold: list[dict]) -> list[dict]:
     for e in gold:
         game = resolve_game(e["system"], games)
         passages = ""
-        top_section = ""
         if game is not None:
             hits = service.search(e["query"], game=game, top_k=_TOP_K)
             passages = "\n".join(f"{h.chunk.section}\n{h.chunk.text}" for h in hits)
-            top_section = hits[0].chunk.section if hits else ""
         hay_norm = _norm(passages)
         hay_tokens = set(_TOKEN.findall(passages.lower()))
         facts = [

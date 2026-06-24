@@ -40,7 +40,7 @@ class Config:
         )
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         token = os.environ.get("DISCORD_TOKEN", "").strip()
         if not token:
             raise ConfigError(

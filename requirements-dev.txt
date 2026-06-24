@@ -3,3 +3,8 @@
 
 # Dependency vulnerability scanner (used by scripts/security_audit.sh).
 pip-audit>=2.7
+
+# Linter (config in ruff.toml). Enforced by the pre-commit hook and CI
+# (.github/workflows/lint.yml). Pinned so a new ruff release adding rules can't
+# turn CI red without a deliberate bump.
+ruff>=0.15,<0.16

@@ -57,12 +57,11 @@ def main() -> None:
             xs = [c for row in t["rows"] for c in row]  # noqa: F841 (kept for clarity)
             tabs = page.find_tables(strategy="lines").tables
             if tabs:
-                bx = [b.bbox for b in tabs]
-                x0 = min(b[0] for b in bx) - 6
                 # render the whole page width band for this table's vertical span
+                pass
             if do_ocr:
                 try:
-                    tp = page.get_textpage_ocr(flags=0, full=False)
+                    page.get_textpage_ocr(flags=0, full=False)
                     print("        (OCR available — see page PNG for visual diff)")
                 except Exception as e:
                     print(f"        (OCR unavailable: {e})")

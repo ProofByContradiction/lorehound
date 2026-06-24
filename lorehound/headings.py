@@ -112,7 +112,7 @@ class StyleHeadings:
         # Bin ALL candidates into 1..max_levels by strength *rank* (quantile), so
         # mid-size section headings still get a level even when rare giant
         # decorative fonts exist — and outliers don't crowd them out.
-        distinct = sorted({v for v in scored.values()}, reverse=True)
+        distinct = sorted(set(scored.values()), reverse=True)
         m = len(distinct) or 1
         level_of = {s: 1 + (i * max_levels) // m for i, s in enumerate(distinct)}
         self.levels: dict[tuple, int] = {k: level_of[v] for k, v in scored.items()}

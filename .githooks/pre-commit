@@ -46,4 +46,21 @@ if [ "${SKIP_DEP_AUDIT:-0}" != "1" ]; then
     fi
 fi
 
+# --- Lint (ruff) -------------------------------------------------------------
+# Static lint of the whole tree (ruff respects ruff.toml's excludes). Mirrors the
+# lint CI so a red commit doesn't surprise you on push. Skip a one-off with:
+#   SKIP_LINT=1 git commit …             (or bypass everything with --no-verify)
+if [ "${SKIP_LINT:-0}" != "1" ]; then
+    root=$(git rev-parse --show-toplevel)
+    ruff_bin="$root/.venv/bin/ruff"
+    [ -x "$ruff_bin" ] || ruff_bin=$(command -v ruff || true)
+    if [ -n "${ruff_bin:-}" ]; then
+        echo "• ruff lint…"
+        "$ruff_bin" check "$root" || {
+            echo "✖ Lint failed. Fix above, or bypass once with: SKIP_LINT=1 git commit …"
+            exit 1
+        }
+    fi
+fi
+
 exit 0

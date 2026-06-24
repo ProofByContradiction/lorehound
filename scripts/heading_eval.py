@@ -125,8 +125,8 @@ def triage(cache_dir="cache"):
 def main(args):
     methods = [
         ("default(size)", lambda d: IdentifyHeaders(d), {}),
-        ("StyleHeadings", lambda d: StyleHeadings(d), dict(demote=True)),
-        ("Style+ToC", lambda d: StyleHeadings(d), dict(demote=True, inject=True)),
+        ("StyleHeadings", lambda d: StyleHeadings(d), {"demote": True}),
+        ("Style+ToC", lambda d: StyleHeadings(d), {"demote": True, "inject": True}),
     ]
     for arg in args:
         path = _resolve(arg)
