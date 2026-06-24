@@ -316,8 +316,11 @@ def _traveller_careers(page, page_no, existing) -> list[dict]:
     one-per-career anchor card ``[[CAREER, name], [PAGE, n]]``; careers.py then
     assembles each career from the skill/rank tables on its page range."""
     text = page.get_text()
-    if sum(m in text for m in _TRAV_CAREER_MARKERS) < 2:
-        return []  # not a career spread (skip sourcebook/setting pages)
+    # A real career spread carries several of these (Qualification, Survival,
+    # Skills, Ranks, Mustering, …); sourcebook NPC/robot pages mention only a
+    # couple incidentally, so require >=3 to skip them.
+    if sum(m in text for m in _TRAV_CAREER_MARKERS) < 3:
+        return []
     for b in page.get_text("dict").get("blocks", []):
         for ln in b.get("lines", []):
             spans = ln.get("spans", [])

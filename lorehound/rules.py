@@ -405,8 +405,12 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
         nc = _name_col(rows)
         for r in rows[1:]:
             name = (r[nc].strip().rstrip(" *†‡").strip()) if nc < len(r) else ""
-            if len(name) >= 2:
-                names[(c.game, c.category)].setdefault(name.lower(), name)
+            name = re.sub(r"(\w)- (\w)", r"\1\2", name)  # de-hyphenate "Chal- lenger"
+            # Skip pure-uppercase words — those are column headers that leaked in
+            # from a fragment table (MAIN WEAPON, REAR), not item names.
+            if len(name) < 2 or (name.replace(" ", "").isalpha() and name.isupper()):
+                continue
+            names[(c.game, c.category)].setdefault(name.lower(), name)
     return {k: sorted(v.values()) for k, v in names.items()}
 
 

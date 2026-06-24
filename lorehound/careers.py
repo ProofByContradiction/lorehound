@@ -266,17 +266,38 @@ def _traveller_career_index(chunks) -> dict[str, dict[str, Career]]:
         src_tables = sorted(tables.get(key, []), key=lambda x: x[0])
         for i, (name, page) in enumerate(careers):
             end = careers[i + 1][1] if i + 1 < len(careers) else page + 2
-            secs = [
-                CareerSection(label=f"{(c.section.split('›')[-1].strip() or 'Table')} · p.{p}", rows=c.rows)
-                for p, c in src_tables
-                if page <= p < end
-            ]
+            secs: list[CareerSection] = []
+            skills_n = 0
+            for p, c in src_tables:
+                if not (page <= p < end):
+                    continue
+                label = _career_section_label(c.section.split("›")[-1].strip())
+                if label == "Skills":  # a career has several skill tables — number them
+                    skills_n += 1
+                    label = "Skills" if skills_n == 1 else f"Skills ({skills_n})"
+                secs.append(CareerSection(label=f"{label} · p.{p}", rows=c.rows))
             if secs:
                 out.setdefault(game, {})[name.lower()] = Career(
                     game=game, name=name, source=source,
                     locator=f"p. {page}", sections=secs[:6],
                 )
     return out
+
+
+def _career_section_label(leaf: str) -> str:
+    """Map a raw find_tables table title to a meaningful career-card label — the
+    titles are often the column header ('1D') or a stray running header
+    ('Traveller Creation'), not the section's real name."""
+    low = leaf.strip().lower()
+    if low in {"1d", "2d", "3d", "d6", "d66", "d"} or low.isdigit() or not low:
+        return "Skills"
+    if "rank" in low or "traveller creation" in low:
+        return "Ranks"
+    if "mustering" in low:
+        return "Mustering Out"
+    if "career progress" in low or "qualif" in low:
+        return "Career Progress"
+    return leaf.strip().title() if leaf.strip().isupper() else leaf.strip()
 
 
 def _section_key(label: str) -> str:
