@@ -374,6 +374,452 @@ def _t2k_careers(page, page_no, existing) -> list[dict]:
 _TRAV_CAREER_MARKERS = ("Qualification", "Survival", "Advancement", "Mishaps",
                         "Events", "Skills and", "Ranks and", "Mustering")
 
+# Known Mongoose 2e core careers — the ~30pt heading word that names a career
+# spread. Used to recognise a career page (and reject e.g. the "S KILLS AND
+# TASKS" chapter banner, which is large but not a career name).
+_TRAV_CORE_CAREERS = frozenset({
+    "agent", "army", "citizen", "drifter", "entertainer", "marine", "merchant",
+    "navy", "noble", "rogue", "scholar", "scout", "prisoner", "psion",
+})
+
+# The universal Mongoose 2e Table-A skill columns. They appear in the PDF text on
+# most careers (as an uppercase ``1D | PERSONAL DEVELOPMENT | …`` header), but a few
+# omit them and many split the header across two lines — so we always normalise
+# Table A to these fixed names. The 5th column ("Officer") appears only on the
+# careers with a commissioned track (Navy / Army / Marine).
+_TRAV_SKILLS_A_HDR = ("Roll", "Personal Development", "Service Skills",
+                      "Advanced Education", "Officer")
+
+_TRAV_NUM = re.compile(r"\d{1,2}$")
+_TRAV_UPPER = re.compile(r"^[A-Z][A-Z0-9 &/().,+-]*$")
+
+
+def _trav_y_bands(words, tol: float = 4.0) -> list[float]:
+    """Sorted row-band tops: y-coordinates collapsed so words on the same text
+    line share a band (a new band starts when y jumps more than ``tol``)."""
+    bands: list[float] = []
+    for y in sorted(round(w[1]) for w in words):
+        if not bands or y - bands[-1] > tol:
+            bands.append(y)
+    return bands
+
+
+def _trav_col_anchors(words, gap: float = 30.0, numeric_only: bool = True) -> list[float]:
+    """Left edges of the columns in a rectangular band, robust to wrapped cells.
+
+    Per row we take the leftmost word of each visual cluster (words within ``gap``
+    of each other are one cell — so ``Gun Combat`` / ``Electronics (comms)`` stay a
+    single cell, not two columns). We then cluster those starts across rows and
+    keep only the columns that recur in at least half the rows, which discards the
+    phantom column a single wrapped continuation would otherwise mint.
+
+    ``numeric_only`` restricts the anchor rows to those whose first column is a
+    roll index (1..12) — the clean, compact data rows — and ignores the wide
+    multi-word header/heading rows. Off for name-keyed tables (career progress)."""
+    bands = _trav_y_bands(words)
+    starts_per_row: list[list[float]] = []
+    roll_xs: list[float] = []
+    for bi, top in enumerate(bands):
+        bottom = bands[bi + 1] if bi + 1 < len(bands) else top + 100
+        row = sorted((w for w in words if top - 4 < w[1] < bottom - 4), key=lambda w: w[0])
+        if not row:
+            continue
+        if numeric_only:
+            if not _TRAV_NUM.fullmatch(row[0][4].strip()):
+                continue
+            # The roll index is its own (short, far-left) column even when the next
+            # column sits closer than ``gap`` (Navy's PD column starts ~20pt right
+            # of the roll). Seed col0 at the roll's x; cluster the rest beyond it.
+            roll_xs.append(row[0][0])
+            data = [w for w in row[1:] if w[0] > row[0][0] + 14]
+        else:
+            data = row
+        prev = None
+        rs: list[float] = []
+        for w in data:
+            if prev is None or w[0] - prev > gap:
+                rs.append(w[0])
+            prev = w[0]
+        starts_per_row.append(rs)
+    flat = sorted(x for rs in starts_per_row for x in rs)
+    clusters: list[list[float]] = []  # [rep_x, count]
+    for x in flat:
+        if clusters and x - clusters[-1][0] <= gap:
+            clusters[-1][1] += 1
+        else:
+            clusters.append([x, 1])
+    thresh = max(2, len(starts_per_row) // 2)
+    cols = [cx for cx, cnt in clusters if cnt >= thresh]
+    if roll_xs:  # prepend the roll column anchor (median roll x)
+        cols = [sorted(roll_xs)[len(roll_xs) // 2]] + cols
+    return cols
+
+
+def _trav_band_rows(words, x_lo, x_hi, y_lo, y_hi, starts, tol: float = 4.0) -> list[list[str]]:
+    """Bucket the words in a rectangle into a cell grid using fixed column
+    ``starts`` (each word joins the rightmost start at/left of it) and y row-bands."""
+    sel = [w for w in words if x_lo <= w[0] < x_hi and y_lo <= w[1] < y_hi and w[4].strip()]
+    if not sel or not starts:
+        return []
+
+    def col_of(x: float) -> int:
+        c = 0
+        for i, cx in enumerate(starts):
+            if x >= cx - 6:
+                c = i
+        return c
+
+    bands = _trav_y_bands(sel)
+    rows: list[list[str]] = []
+    for bi, top in enumerate(bands):
+        bottom = bands[bi + 1] if bi + 1 < len(bands) else top + 100
+        cells: list[list] = [[] for _ in starts]
+        for w in sel:
+            if top - tol < w[1] < bottom - tol:
+                cells[col_of(w[0])].append(w)
+        rows.append([" ".join(x[4] for x in sorted(b, key=lambda w: w[0])) for b in cells])
+    return rows
+
+
+def _trav_drop_empty_cols(rows: list[list[str]]) -> list[list[str]]:
+    if not rows:
+        return rows
+    nc = max(len(r) for r in rows)
+    rows = [r + [""] * (nc - len(r)) for r in rows]
+    keep = [i for i in range(nc) if any(r[i].strip() for r in rows)]
+    return [[r[i] for i in keep] for r in rows]
+
+
+def _trav_merge_headerless_cols(rows: list[list[str]]) -> list[list[str]]:
+    """Fold any column whose header cell is blank into the column on its left,
+    cell by cell. A wrapped cell ("Melee (unarmed)") can split its continuation
+    ("(unarmed)") into a phantom column the geometry pass over-segments; since every
+    real Mongoose career column carries a header, a header-less column is that
+    spill-over and belongs back with its neighbour."""
+    if len(rows) < 2 or not rows[0]:
+        return rows
+    header = rows[0]
+    keep = [0] + [j for j in range(1, len(header)) if header[j].strip()]
+    if len(keep) == len(header):
+        return rows
+    out: list[list[str]] = []
+    for r in rows:
+        r = r + [""] * (len(header) - len(r))
+        merged = []
+        for j in range(len(header)):
+            if j in keep:
+                merged.append(r[j])
+            elif merged:  # append spill-over to the last kept column
+                merged[-1] = (merged[-1] + " " + r[j]).strip() if r[j] else merged[-1]
+        out.append(merged)
+    return out
+
+
+def _trav_is_upper(cell: str) -> bool:
+    c = cell.strip()
+    return bool(c) and bool(_TRAV_UPPER.match(c)) and any(ch.isalpha() for ch in c)
+
+
+def _trav_section_headings(page) -> list[tuple[str, float, float, float]]:
+    """(text, size, x0, y0) for every line on the page (heading detection by the
+    caller). Multi-span lines are joined; size is the line's max span size."""
+    out: list[tuple[str, float, float, float]] = []
+    for b in page.get_text("dict").get("blocks", []):
+        for ln in b.get("lines", []):
+            spans = ln.get("spans", [])
+            txt = " ".join(s["text"] for s in spans).strip()
+            size = max((s["size"] for s in spans), default=0.0)
+            if txt:
+                out.append((txt, size, ln["bbox"][0], ln["bbox"][1]))
+    return out
+
+
+def _trav_heading_rects(page, min_size: float = 13.0) -> list[tuple[float, float, float, float]]:
+    """Bounding boxes of heading-sized text lines (>= ``min_size`` pt). Their words
+    (the big career name and the vertical section titles like "Ranks and bonuses"
+    set in the table's left margin) must be dropped from the data grids, where they
+    would otherwise leak into a column."""
+    rects: list[tuple[float, float, float, float]] = []
+    for b in page.get_text("dict").get("blocks", []):
+        for ln in b.get("lines", []):
+            spans = ln.get("spans", [])
+            size = max((s["size"] for s in spans), default=0.0)
+            txt = " ".join(s["text"] for s in spans).strip()
+            if txt and size >= min_size:
+                rects.append(tuple(ln["bbox"]))
+    return rects
+
+
+def _trav_words(page) -> list:
+    """Page words with heading-sized text (career name, vertical section titles)
+    removed, so they can't pollute a reconstructed data column."""
+    rects = _trav_heading_rects(page)
+
+    def in_heading(w) -> bool:
+        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        return any(x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1
+                   for x0, y0, x1, y1 in rects)
+
+    return [w for w in page.get_text("words") if w[4].strip() and not in_heading(w)]
+
+
+def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
+    """Reconstruct the "Skills and training" band into Table A (the universal
+    Roll | Personal Development | Service Skills | Advanced Education grid) and, if
+    present, Table B (the per-assignment specialist-skills grid). The two stack in
+    one band; a second ``1D``-led uppercase row marks B's header, splitting them."""
+    band = [w for w in words if y_lo <= w[1] < y_hi]
+    starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
+    rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
+    # Header rows: first cell "1D" with >=2 uppercase cells after it. The 1st is
+    # Table A's header (universal skills), the 2nd starts Table B (specialists).
+    hdr_idx = [
+        i for i, r in enumerate(rows)
+        if r and r[0].strip() == "1D" and sum(_trav_is_upper(c) for c in r[1:]) >= 2
+    ]
+    if not hdr_idx:
+        return []
+    out: list[dict] = []
+    a_i = hdr_idx[0]
+    b_i = hdr_idx[1] if len(hdr_idx) > 1 else None
+    a_end = b_i if b_i is not None else len(rows)
+    a_rows = [r for r in rows[a_i + 1:a_end] if r and _TRAV_NUM.fullmatch(r[0].strip())]
+    a = _trav_drop_empty_cols([rows[a_i]] + a_rows)
+    if a:  # normalise A's header to the universal column names
+        n = len(a[0])
+        a[0] = (list(_TRAV_SKILLS_A_HDR) + a[0][len(_TRAV_SKILLS_A_HDR):])[:n]
+    if len(a) >= 2:
+        out.append({"page": page_no, "title": "Skills and training", "rows": a})
+    if b_i is not None:
+        b_rows = [r for r in rows[b_i + 1:] if r and _TRAV_NUM.fullmatch(r[0].strip())]
+        b = _trav_merge_headerless_cols(
+            _trav_drop_empty_cols([["Roll"] + rows[b_i][1:]] + b_rows)
+        )
+        if len(b) >= 2:
+            out.append({"page": page_no, "title": "Specialist Skills", "rows": b})
+    return out
+
+
+def _trav_ranks_section(words, page_no, y_lo, y_hi) -> list[dict]:
+    """Reconstruct the "Ranks and bonuses" band: RANK | <category> | SKILL OR BONUS.
+    A career can stack two rank tracks (e.g. Agent's enlisted vs intelligence), each
+    with its own ``RANK``-led header; we keep them as one table (the inline second
+    header reads fine as a sub-divider)."""
+    band = [w for w in words if y_lo <= w[1] < y_hi]
+    starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
+    rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
+    rows = [r for r in rows if any(c.strip() for c in r)]
+    rows = _trav_drop_empty_cols(rows)
+    # Drop a leading orphan row that isn't the RANK header or a numbered rank.
+    while rows and not (
+        rows[0][0].strip().upper().startswith("RANK")
+        or _TRAV_NUM.fullmatch(rows[0][0].strip())
+    ):
+        rows.pop(0)
+    # Some careers render the RANK header twice (an uppercase + a title-case shadow
+    # line); drop a header row that immediately repeats the one above it.
+    deduped: list[list[str]] = []
+    for r in rows:
+        if (
+            deduped
+            and r[0].strip().upper().startswith("RANK")
+            and deduped[-1][0].strip().upper().startswith("RANK")
+        ):
+            continue
+        if (
+            deduped
+            and deduped[-1][0].strip().upper().startswith("RANK")
+            and [c.strip().lower() for c in r] == [c.strip().lower() for c in deduped[-1]]
+        ):
+            continue
+        deduped.append(r)
+    rows = deduped
+    if len(rows) < 3 or len(rows[0]) < 2:
+        return []
+    return [{"page": page_no, "title": "Ranks and bonuses", "rows": rows}]
+
+
+def _trav_progress_section(words, page_no, y_lo, y_hi) -> list[dict]:
+    """Reconstruct the "Career progress" survival/advancement table: a blank-headed
+    assignment column then SURVIVAL and ADVANCEMENT (their checks per assignment)."""
+    band = [w for w in words if 310 <= w[0] < 565 and y_lo <= w[1] < y_hi]
+    starts = _trav_col_anchors(band, gap=30.0, numeric_only=False)
+    rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
+    rows = [r for r in rows if any(c.strip() for c in r)]
+    if len(rows) < 2 or len(rows[0]) < 2:
+        return []
+    if not rows[0][0].strip():  # name the blank assignment-column header
+        rows[0][0] = "Assignment"
+    return [{"page": page_no, "title": "Career progress", "rows": rows}]
+
+
+def _trav_mustering_section(words, page_no, y_lo, y_hi) -> list[dict]:
+    """Reconstruct "Mustering out benefits": 1D | CASH | BENEFITS."""
+    band = [w for w in words if 310 <= w[0] < 565 and y_lo <= w[1] < y_hi]
+    starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
+    rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
+    rows = [r for r in rows if any(c.strip() for c in r)]
+    rows = _trav_merge_headerless_cols(rows)  # fold a wrapped-benefit spill column
+    if len(rows) < 3 or len(rows[0]) < 2:
+        return []
+    return [{"page": page_no, "title": "Mustering out benefits", "rows": rows}]
+
+
+# Tokens that aren't part of a Mishaps/Events description: the small-caps column
+# labels printed above each table, and a stray "table"/page reference.
+_TRAV_ROLL_NOISE = frozenset({"MISHAP", "EVENT", "MISHAPS", "EVENTS"})
+
+
+def _trav_roll_text_section(words, page_no, title, header, y_lo, y_hi, page_h=792.0) -> list[dict]:
+    """Reconstruct a roll | description table (Mishaps / Events), where each
+    description wraps over several text lines. Rows are keyed by the roll-index word
+    in the left column; the description gathers every body word down to the next
+    roll index. The roll column's x varies a little per career (~79–86), so we
+    locate it from the leftmost numeric words rather than hardcoding it."""
+    foot = page_h - 24  # drop the page-number folio in the bottom margin
+
+    def keep(w) -> bool:
+        return (
+            70 <= w[0] < 580 and y_lo <= w[1] < min(y_hi, foot)
+            and w[4].strip() and w[4].strip().upper() not in _TRAV_ROLL_NOISE
+        )
+
+    sel = [w for w in words if keep(w)]
+    nums = [w for w in sel if w[0] < 110 and _TRAV_NUM.fullmatch(w[4].strip())]
+    if not nums:
+        return []
+    roll_x = min(w[0] for w in nums)               # the roll column's left edge
+    rolls = [w for w in nums if w[0] <= roll_x + 12]
+    body_x = roll_x + 22                            # descriptions sit ~25pt right
+    rolls.sort(key=lambda w: w[1])
+    rows = [list(header)]
+    for i, rw in enumerate(rolls):
+        top = rw[1] - 2
+        bottom = rolls[i + 1][1] - 2 if i + 1 < len(rolls) else min(y_hi, foot)
+        body = [w for w in sel if w[0] >= body_x and top <= w[1] < bottom]
+        body.sort(key=lambda w: (round(w[1] / 3), w[0]))
+        text = " ".join(w[4] for w in body).strip()
+        if text:
+            rows.append([rw[4].strip(), text])
+    if len(rows) < 3:
+        return []
+    return [{"page": page_no, "title": title, "rows": rows}]
+
+
+def _trav_has_section_heading(page, *names, min_size: float = 18.0) -> bool:
+    """True if the page has a styled heading (>= ``min_size`` pt) whose text starts
+    with one of ``names`` (case-insensitive) — distinguishes a real career section
+    heading from an incidental prose mention of the word."""
+    for txt, size, _x, _y in _trav_section_headings(page):
+        low = txt.strip().lower()
+        if size >= min_size and any(low.startswith(n) for n in names):
+            return True
+    return False
+
+
+def is_traveller_career_page(page) -> bool:
+    """True if this page is part of a Mongoose Traveller career spread — either the
+    career page (a ~30pt known-career-name heading) or its facing page (the Mishaps
+    *and* Events section headings). Used to swap the mangled generic tables for the
+    clean geometric reconstruction. The strong, specific signals (a known career
+    name; both the Mishaps and Events headings) keep this off non-career pages — a
+    sourcebook page that merely mentions "events" in prose won't trip it."""
+    if _trav_career_name(page):
+        return True
+    # A career's facing page: the Mishaps and Events tables (their styled headings).
+    return (
+        _trav_has_section_heading(page, "mishaps")
+        and _trav_has_section_heading(page, "events")
+    )
+
+
+def _trav_career_name(page) -> str:
+    """The career name from the page's ~30pt heading word, Title-cased — '' if this
+    page has no career-name heading (e.g. the facing Mishaps/Events page)."""
+    for txt, size, _x, _y in _trav_section_headings(page):
+        low = txt.lower().replace(" ", "")
+        if 26 <= size <= 40 and 2 <= len(txt) <= 22 and low in _TRAV_CORE_CAREERS:
+            return txt.title()
+    return ""
+
+
+def traveller_career_sections(page, page_no: int) -> list[dict]:
+    """Geometrically reconstruct every career sub-table on one Traveller career-spread
+    page, returning clean ``{"page", "title", "rows"}`` dicts with proper headers.
+
+    ``find_tables(strategy="lines")`` shatters these tables — it drops the 4th skill
+    column, omits header rows, and merges Table A's last row into Table B's header —
+    so the generic pass mangles them. Here we cluster columns from word x-positions
+    (recurrence-filtered so wrapped cells don't mint phantom columns) and attach the
+    correct header to each section. Sections are carved from the page's own headings:
+
+    * career page — Skills and training (+ Specialist Skills), Ranks and bonuses,
+      Career progress, Mustering out benefits;
+    * facing page — Mishaps, Events.
+
+    Returns ``[]`` for a non-career page, so callers can guard cheaply."""
+    if not is_traveller_career_page(page):
+        return []
+    words = _trav_words(page)  # heading-sized words removed (career name, margins)
+    if not words:
+        return []
+    heads = _trav_section_headings(page)
+    page_bottom = page.rect.height
+
+    def heading_y(*names, x_lo=0.0, x_hi=1e9):
+        for txt, _size, x, y in heads:
+            t = txt.strip().lower()
+            if any(t == n or t.startswith(n) for n in names) and x_lo <= x <= x_hi:
+                return y
+        return None
+
+    out: list[dict] = []
+
+    # --- left-page sections (Skills, Ranks): full width, below the right column.
+    # A section's band ends at the next left-page heading of ANY kind (Skills,
+    # Ranks, Mishaps, Events) so it can't swallow the following section's content.
+    skills_y = heading_y("skills and training", x_hi=300)
+    ranks_y = heading_y("ranks and bonuses", x_hi=400)
+    mish_y = heading_y("mishaps", x_hi=300)
+    ev_y = heading_y("events", x_hi=300)
+    left_heads = sorted(y for y in (skills_y, ranks_y, mish_y, ev_y) if y is not None)
+
+    def left_end(start):
+        return min((y for y in left_heads if y > start + 2), default=page_bottom) - 2
+
+    if skills_y is not None:
+        # The (uppercase) Table-A header sits a little ABOVE the vertical heading's
+        # top, so start the band above it; end at the next left-page heading.
+        out += _trav_skills_sections(words, page_no, skills_y - 22, left_end(skills_y))
+    if ranks_y is not None:
+        out += _trav_ranks_section(words, page_no, ranks_y - 22, left_end(ranks_y))
+
+    # --- right-column sections (Career progress, Mustering): top-right quadrant,
+    # ABOVE where the left-page tables begin. We cap their bottom just before the
+    # next right-column heading (or the Skills header, which floats up to ~22pt
+    # above the Skills heading line) so the Skills header can't leak in.
+    prog_y = heading_y("career progress", x_lo=300)
+    must_y = heading_y("mustering out", x_lo=300)
+    skills_top = (skills_y - 24) if skills_y is not None else 330
+
+    if prog_y is not None:
+        end = (must_y - 2) if (must_y is not None and must_y > prog_y) else skills_top
+        out += _trav_progress_section(words, page_no, prog_y + 8, end)
+    if must_y is not None:
+        out += _trav_mustering_section(words, page_no, must_y + 8, skills_top)
+
+    # --- facing page: Mishaps (1D) + Events (2D), each a roll | description table.
+    if mish_y is not None:
+        end = ev_y - 2 if ev_y is not None and ev_y > mish_y else page_bottom
+        out += _trav_roll_text_section(
+            words, page_no, "Mishaps", ["1D", "Mishap"], mish_y, end, page_bottom
+        )
+    if ev_y is not None:
+        out += _trav_roll_text_section(
+            words, page_no, "Events", ["2D", "Event"], ev_y, page_bottom, page_bottom
+        )
+    return out
+
 
 def _traveller_careers(page, page_no, existing) -> list[dict]:
     """Traveller career *anchor*: Mongoose careers are heading-anchored (a big

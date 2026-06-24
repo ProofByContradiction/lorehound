@@ -252,5 +252,104 @@ class TestAssemble(unittest.TestCase):
         self.assertIsNone(assemble_career(self._search_over(chunks), "Trav", "Agent"))
 
 
+def _w(x0, y, text, *, w=10.0):
+    """A minimal PyMuPDF word tuple (x0, y0, x1, y1, text, block, line, word)."""
+    return (x0, y, x0 + w, y + 9.0, text, 0, 0, 0)
+
+
+class TestTravellerColumnAnchors(unittest.TestCase):
+    """The geometric column clusterer used to rebuild Mongoose Traveller career
+    sub-tables from word x-positions (where find_tables drops columns)."""
+
+    def test_roll_index_is_its_own_column_even_when_close(self):
+        # The roll index sits ~20pt left of column 1 (Navy/Army), closer than the
+        # gap — it must still be its own column.
+        from lorehound.pdf_tables import _trav_col_anchors
+
+        words = []
+        for i, y in enumerate((10, 22, 34)):
+            words += [_w(85, y, str(i + 1)), _w(106, y, "STR"), _w(225, y, "Pilot"),
+                      _w(315, y, "Medic")]
+        cols = _trav_col_anchors(words, gap=30.0, numeric_only=True)
+        self.assertEqual(len(cols), 4)  # roll + 3 data columns, none merged
+
+    def test_wrapped_continuation_does_not_mint_a_column(self):
+        # A single wrapped cell ("Electronics (computers)") shouldn't add a column.
+        from lorehound.pdf_tables import _trav_col_anchors
+
+        words = []
+        for i, y in enumerate((10, 22, 34, 46)):
+            words += [_w(85, y, str(i + 1)), _w(126, y, "Recon"), _w(270, y, "Stealth"),
+                      _w(400, y, "Carouse")]
+        words += [_w(452, 22, "(computers)")]  # one stray continuation in row 2
+        cols = _trav_col_anchors(words, gap=30.0, numeric_only=True)
+        self.assertEqual(len(cols), 4)
+
+
+class TestTravellerSkillsSplit(unittest.TestCase):
+    """The Skills band splits into Table A (universal skills, header forced to the
+    fixed Mongoose names) and Table B (specialist skills, header kept from text)."""
+
+    def _skills_words(self):
+        words = []
+        # Table A header (present in PDF text as an uppercase 1D-led row).
+        words += [_w(85, 0, "1D"), _w(126, 0, "PERSONAL"), _w(160, 0, "DEVELOPMENT"),
+                  _w(270, 0, "SERVICE"), _w(300, 0, "SKILLS"),
+                  _w(400, 0, "ADVANCED"), _w(440, 0, "EDUCATION")]
+        for i, y in enumerate((12, 24, 36, 48, 60, 72), start=1):
+            words += [_w(85, y, str(i)), _w(126, y, "Gun"), _w(270, y, "Drive"),
+                      _w(400, y, "Medic")]
+        # Table B header (specialist assignments — uppercase, kept verbatim).
+        words += [_w(85, 90, "1D"), _w(126, 90, "LAW"), _w(160, 90, "ENFORCEMENT"),
+                  _w(270, 90, "INTELLIGENCE"), _w(400, 90, "CORPORATE")]
+        for i, y in enumerate((102, 114, 126), start=1):
+            words += [_w(85, y, str(i)), _w(126, y, "Recon"), _w(270, y, "Stealth"),
+                      _w(400, y, "Carouse")]
+        return words
+
+    def test_table_a_gets_fixed_header_and_b_is_split_off(self):
+        from lorehound.pdf_tables import _trav_skills_sections
+
+        secs = _trav_skills_sections(self._skills_words(), 5, -10, 140)
+        titles = [s["title"] for s in secs]
+        self.assertEqual(titles, ["Skills and training", "Specialist Skills"])
+        a, b = secs[0]["rows"], secs[1]["rows"]
+        self.assertEqual(
+            a[0], ["Roll", "Personal Development", "Service Skills", "Advanced Education"]
+        )
+        self.assertEqual(len(a), 7)  # header + 6 roll rows
+        # Table B keeps its uppercase assignment header, but with a "Roll" first col.
+        self.assertEqual(b[0], ["Roll", "LAW ENFORCEMENT", "INTELLIGENCE", "CORPORATE"])
+        self.assertEqual(len(b), 4)  # header + 3 roll rows
+
+
+class TestCareerSectionLabel(unittest.TestCase):
+    """The clean reconstructor titles map to tidy /class card labels."""
+
+    def test_maps_reconstructor_titles(self):
+        from lorehound.careers import _career_section_label
+
+        self.assertEqual(_career_section_label("Skills and training"), "Skills")
+        self.assertEqual(_career_section_label("Specialist Skills"), "Specialist Skills")
+        self.assertEqual(_career_section_label("Ranks and bonuses"), "Ranks")
+        self.assertEqual(_career_section_label("Career progress"), "Career Progress")
+        self.assertEqual(_career_section_label("Mustering out benefits"), "Mustering Out")
+        self.assertEqual(_career_section_label("Mishaps"), "Mishaps")
+        self.assertEqual(_career_section_label("Events"), "Events")
+        self.assertEqual(_career_section_label("1D"), "Skills")  # bare-header fragment
+
+
+class TestCareerAnchorGuard(unittest.TestCase):
+    """drive_client keeps the anchor card but drops the mangled section tables when
+    swapping in the reconstructed ones."""
+
+    def test_recognizes_anchor_only(self):
+        from lorehound.drive_client import _is_career_anchor
+
+        self.assertTrue(_is_career_anchor([["CAREER", "Agent"], ["PAGE", "23"]]))
+        self.assertFalse(_is_career_anchor([["1D", "Skill"], ["1", "Gun Combat"]]))
+        self.assertFalse(_is_career_anchor([["Roll", "Personal Development"]]))
+
+
 if __name__ == "__main__":
     unittest.main()

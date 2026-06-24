@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .pdf_tables import classify_table, extract_tables
+from .pdf_tables import classify_table
 from .tables import is_ship_statblock
 
 
@@ -48,6 +48,17 @@ def _dominant_heading(page) -> str:
     cands.sort()
     return re.sub(r"[A-Za-z'’]+", lambda m: m.group(0).capitalize(), cands[0][2])
 
+def _is_career_anchor(rows) -> bool:
+    """A Traveller career *anchor* table — ``[[CAREER, name], [PAGE, n]]`` — emitted
+    by the career reconstructor. Kept verbatim when swapping a career page's mangled
+    section tables for the clean reconstruction (the assembler keys off it)."""
+    return bool(
+        rows and len(rows) == 2
+        and len(rows[0]) >= 2 and rows[0][0].strip().upper() == "CAREER"
+        and len(rows[1]) >= 2 and rows[1][0].strip().upper() == "PAGE"
+    )
+
+
 # Read-only access is all we need.
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -60,7 +71,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v9-ships-any-chapter"
+TABLE_VERSION = "find-tables-lines-v10-trav-careers"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
@@ -307,6 +318,46 @@ class DriveClient:
                 elif level == chap_level + 1:
                     sec = title
             return chap.split(".", 1)[-1].strip(), sec
+
+        # Mongoose Traveller career spreads: find_tables shatters the career
+        # sub-tables (drops columns, omits headers, merges the skill A/B split), so
+        # the generic pass mangles them. Swap the generic tables on each career page
+        # for a clean geometric reconstruction (see pdf_tables). The career *anchor*
+        # cards ([[CAREER, name], [PAGE, n]]) the reconstructor emits are kept — the
+        # career assembler keys off them — only the mangled section tables are
+        # replaced. T2K (no career spreads) is untouched: no page tests positive.
+        from .sources import profile_for
+
+        career_pages: dict[int, list[dict]] = {}
+        prof = profile_for(game)
+        if prof is not None and any("traveller" in k for k in prof.games):
+            from .pdf_tables import (
+                is_traveller_career_page,
+                traveller_career_sections,
+            )
+
+            # Scan every page (not just those with generic tables): a career's facing
+            # Mishaps/Events page often yields no find_tables hits, so it would be
+            # missed if we only looked at pages already in ``raw``. Gated to the
+            # Traveller profile so other books (T2K, etc.) skip the scan entirely.
+            for page_no in range(1, doc.page_count + 1):
+                try:
+                    page = doc.load_page(page_no - 1)
+                except Exception:  # noqa: BLE001
+                    continue
+                if is_traveller_career_page(page):
+                    career_pages[page_no] = traveller_career_sections(page, page_no)
+        if career_pages:
+            kept: list[dict] = []
+            for t in raw:
+                if t["page"] not in career_pages:
+                    kept.append(t)  # not a career page — keep the generic table
+                elif _is_career_anchor(t["rows"]):
+                    kept.append(t)  # the anchor card — keep it
+                # else: a mangled generic career-section table — drop it
+            for _page_no, secs in career_pages.items():
+                kept.extend(secs)
+            raw = kept
 
         out: list[dict] = []
         for t in raw:

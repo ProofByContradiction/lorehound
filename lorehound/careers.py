@@ -279,16 +279,21 @@ def _traveller_career_index(chunks) -> dict[str, dict[str, Career]]:
             if secs:
                 out.setdefault(game, {})[name.lower()] = Career(
                     game=game, name=name, source=source,
-                    locator=f"p. {page}", sections=secs[:6],
+                    locator=f"p. {page}", sections=secs[:8],  # a full spread = 7 tables
                 )
     return out
 
 
 def _career_section_label(leaf: str) -> str:
-    """Map a raw find_tables table title to a meaningful career-card label — the
-    titles are often the column header ('1D') or a stray running header
-    ('Traveller Creation'), not the section's real name."""
+    """Map a career-table title to a meaningful card label. The geometric Traveller
+    reconstructor gives clean section titles ("Skills and training", "Specialist
+    Skills", "Career progress"…); a fragment that escaped it may still carry the bare
+    column header ('1D') or a stray running header ('Traveller Creation') instead."""
     low = leaf.strip().lower()
+    if "specialist" in low:
+        return "Specialist Skills"
+    if low.startswith("skills"):
+        return "Skills"
     if low in {"1d", "2d", "3d", "d6", "d66", "d"} or low.isdigit() or not low:
         return "Skills"
     if "rank" in low or "traveller creation" in low:
@@ -297,6 +302,10 @@ def _career_section_label(leaf: str) -> str:
         return "Mustering Out"
     if "career progress" in low or "qualif" in low:
         return "Career Progress"
+    if low.startswith("mishap"):
+        return "Mishaps"
+    if low.startswith("event"):
+        return "Events"
     return leaf.strip().title() if leaf.strip().isupper() else leaf.strip()
 
 
