@@ -85,7 +85,9 @@ def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
         name_col = _name_col(rows)
         table = h.chunk.section.split("›")[-1].strip()
         for row in rows[1:]:
-            name = row[name_col].strip() if name_col < len(row) else ""
+            # Normalize away trailing footnote markers ("BMP-1*" == "BMP-1") so the
+            # same vehicle from a full table + a fragment re-detection collapses.
+            name = (row[name_col].strip().rstrip(" *†‡").strip()) if name_col < len(row) else ""
             if not name:
                 continue
             key = (h.chunk.source, name.lower())
@@ -126,6 +128,31 @@ async def _game_autocomplete(
         for g in rules.index.games
         if cur in g.lower()
     ][:25]
+
+
+async def _catalog_autocomplete(
+    interaction: discord.Interaction, current: str, category: str
+) -> list[app_commands.Choice[str]]:
+    """Suggest item names from a game's weapon/vehicle catalogs (deduped at index
+    time). Free-text still works — these are just suggestions to browse by."""
+    rules: RulesService = interaction.client.rules_service  # type: ignore[attr-defined]
+    game = _resolve_game(rules, getattr(interaction.namespace, "source", "") or "")
+    if game is None:
+        return []
+    cur = current.lower()
+    return [
+        app_commands.Choice(name=n[:100], value=n[:100])
+        for n in rules.catalog_names(game, category)
+        if cur in n.lower()
+    ][:25]
+
+
+async def _item_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _catalog_autocomplete(interaction, current, "items")
+
+
+async def _transport_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _catalog_autocomplete(interaction, current, "transport")
 
 
 async def _book_autocomplete(
@@ -588,10 +615,12 @@ class RulesCog(commands.Cog):
     )
     @app_commands.describe(
         source="Which game to search",
-        query="What to look up, e.g. assault rifle, body armor, medkit",
+        query="An item — pick from the list, or type to search",
         book="Optional: narrow to a single book",
     )
-    @app_commands.autocomplete(source=_game_autocomplete, book=_book_autocomplete)
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_item_name_autocomplete, book=_book_autocomplete
+    )
     async def item(
         self,
         interaction: discord.Interaction,
@@ -607,10 +636,12 @@ class RulesCog(commands.Cog):
     )
     @app_commands.describe(
         source="Which game to search",
-        query="What to look up, e.g. jump drive, hull armor, APC",
+        query="A vehicle/craft — pick from the list, or type to search",
         book="Optional: narrow to a single book",
     )
-    @app_commands.autocomplete(source=_game_autocomplete, book=_book_autocomplete)
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_transport_name_autocomplete, book=_book_autocomplete
+    )
     async def transport(
         self,
         interaction: discord.Interaction,

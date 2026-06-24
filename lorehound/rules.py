@@ -386,6 +386,30 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     return chunks
 
 
+def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]]:
+    """Per (game, category) sorted list of item names from catalog tables (wide
+    stat blocks — weapons, vehicles), so /item and /transport can offer them in
+    autocomplete. Only wide multi-row tables qualify (a rules/feature table isn't
+    a catalogue)."""
+    from collections import defaultdict
+
+    from .tables import _name_col
+
+    names: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
+    for c in chunks:
+        if c.category not in ("items", "transport") or not c.rows:
+            continue
+        rows = [[(x or "").strip() for x in r] for r in c.rows if any((x or "").strip() for x in r)]
+        if len(rows) < 3 or len(rows[0]) < 5:
+            continue
+        nc = _name_col(rows)
+        for r in rows[1:]:
+            name = (r[nc].strip().rstrip(" *†‡").strip()) if nc < len(r) else ""
+            if len(name) >= 2:
+                names[(c.game, c.category)].setdefault(name.lower(), name)
+    return {k: sorted(v.values()) for k, v in names.items()}
+
+
 class RulesService:
     def __init__(self, drive: DriveClient | None) -> None:
         self.drive = drive
@@ -393,6 +417,8 @@ class RulesService:
         # Structured careers per game: {game -> {name_lower -> Career}}. Built at
         # index time; games absent here fall back to search-assemble in find_career.
         self.careers: dict[str, dict[str, Career]] = {}
+        # Catalog item names per (game, category) for /item and /transport pickers.
+        self._catalog: dict[tuple[str, str], list[str]] = {}
 
     @property
     def ready(self) -> bool:
@@ -412,12 +438,17 @@ class RulesService:
             chunks.extend(_tables_for_doc(doc.name, doc.tables))
         self.index.build(chunks)
         self.careers = detect_careers(chunks)
+        self._catalog = _build_catalog_names(chunks)
         return {
             "documents": len(docs),
             "chunks": len(chunks),
             "games": self.index.files_by_game,
             "careers": sum(len(v) for v in self.careers.values()),
         }
+
+    def catalog_names(self, game: str, category: str) -> list[str]:
+        """Sorted item names for a game's weapon/vehicle catalogs (autocomplete)."""
+        return self._catalog.get((game, category), [])
 
     def search(
         self,
