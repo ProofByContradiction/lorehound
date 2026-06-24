@@ -35,6 +35,28 @@ _MOBILE_GRID_MAX = 42
 # A die-roll column header: "D10", "2D6", "1D", "D66", "D100", or "Roll".
 _DIE_HDR = re.compile(r"(?i)^(roll|\d*d\d+|\d*d)$")
 
+# A "stat block" is the transpose of a catalogue: its *rows* are the stats (the
+# first column is a label) and there's no header row. Traveller renders each ship
+# this way — first column Hull / Armour / M-Drive… with the ship name as a page
+# heading, not a column. We render these as a Stat | Value card, not a catalogue.
+_SHIP_PARTS = frozenset({
+    "hull", "armour", "armor", "m-drive", "j-drive", "manoeuvre drive",
+    "jump drive", "power plant", "power", "bridge", "computer", "sensors",
+    "staterooms", "stateroom", "cargo", "fuel", "fuel tanks", "weapons",
+    "weapon", "systems", "software", "common areas", "airlock", "drive",
+    "screens", "turret", "hardpoints", "hardpoint", "armoured bulkheads",
+})
+
+
+def is_ship_statblock(rows: list[list[str]]) -> bool:
+    """True if ``rows`` is a component stat block (first column is ship-system
+    labels — Hull, Armour, M-Drive…) rather than a catalogue of named items."""
+    col0 = [(r[0] or "").strip().lower() for r in rows if r and (r[0] or "").strip()]
+    if len(col0) < 4:
+        return False
+    hits = sum(1 for c in col0 if c in _SHIP_PARTS)
+    return hits >= max(3, len(col0) // 2)
+
 
 def _wrap_cell(text: str, width: int) -> list[str]:
     if not text:
@@ -255,6 +277,19 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     the item name (returned so the caller can use it as the card header).
     ``item_name`` is None when no single row matched (whole-table fallback)."""
     grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
+    # Component stat block (e.g. a Traveller ship): rows already *are* the stats,
+    # so render col0 as the label and the rest of the row as the value — no row to
+    # match against. The ship name comes from the chunk's heading, not the grid.
+    if is_ship_statblock(grid):
+        stats = [["Stat", "Value"]]
+        for row in grid:
+            label = row[0].strip()
+            value = " ".join(c.strip() for c in row[1:] if c.strip())
+            if label and value:
+                stats.append([label, value])
+        if len(stats) >= 2:
+            block, wide = render_table(stats)
+            return block, wide, None
     # A single-item grid (header + one row, e.g. an exploded catalog pick) always
     # renders that item's card; otherwise match the query against the rows.
     r = 1 if len(grid) == 2 else match_row(grid, query)

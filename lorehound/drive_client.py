@@ -19,11 +19,34 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .pdf_tables import classify_table, extract_tables
+from .tables import is_ship_statblock
+
+
+def _dominant_heading(page) -> str:
+    """The page's most prominent heading (largest font ≥ 22pt, topmost on ties),
+    word-capitalised. Used to name a component stat block whose own table title is
+    just a bare header — e.g. a Traveller ship page titled only "TL12" actually
+    sits under a 24pt "SCOUT/COURIER"."""
+    cands: list[tuple[float, float, str]] = []
+    for b in page.get_text("dict")["blocks"]:
+        for ln in b.get("lines", []):
+            spans = ln.get("spans", [])
+            if not spans:
+                continue
+            size = max(s["size"] for s in spans)
+            text = " ".join(s["text"] for s in spans).strip()
+            if len(text) > 2 and size >= 22:
+                cands.append((-size, ln["bbox"][1], text))  # largest font, then topmost
+    if not cands:
+        return ""
+    cands.sort()
+    return re.sub(r"[A-Za-z']+", lambda m: m.group(0).capitalize(), cands[0][2])
 
 # Read-only access is all we need.
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -37,7 +60,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v7-toc-chap-level"
+TABLE_VERSION = "find-tables-lines-v8-ship-names"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
@@ -272,7 +295,6 @@ class DriveClient:
             from .pdf_tables import toc_from_contents_page
 
             toc = toc_from_contents_page(doc) or toc
-        doc.close()
         chap_level = min((t[0] for t in toc), default=1)
 
         def chapter_section(page_no: int) -> tuple[str, str]:
@@ -294,16 +316,29 @@ class DriveClient:
             category = classify_table(chap, t["rows"])
             if category == "noise":
                 continue
+            title = t["title"]
+            # A ship stat block's table title is just a tech-level header ("TL12");
+            # its real name is the page's dominant heading ("SCOUT/COURIER"). Pull
+            # it so the ship is named in /transport and on its card.
+            if (
+                category == "transport"
+                and chap.upper() == "COMMON SPACECRAFT"
+                and is_ship_statblock(t["rows"])
+            ):
+                head = _dominant_heading(doc.load_page(t["page"] - 1))
+                if head:
+                    title = head
             out.append(
                 {
                     "page": t["page"],
                     "chapter": chap,
                     "section": sec,
-                    "title": t["title"],
+                    "title": title,
                     "category": category,
                     "rows": t["rows"],
                 }
             )
+        doc.close()
         return out
 
     def _extract_text(self, f: dict) -> tuple[str, list[dict]]:

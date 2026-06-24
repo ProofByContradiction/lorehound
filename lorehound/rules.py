@@ -410,7 +410,7 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
     a catalogue)."""
     from collections import defaultdict
 
-    from .tables import _name_col
+    from .tables import _name_col, is_ship_statblock
 
     # Traveller renders each ship as a per-ship table whose *rows* are its
     # components (Hull, Bridge, M-Drive…) and whose name lives in the title, not
@@ -430,6 +430,13 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
         if c.category not in ("items", "transport") or not c.rows:
             continue
         rows = [[(x or "").strip() for x in r] for r in c.rows if any((x or "").strip() for x in r)]
+        # A ship stat block's rows are its components, not a list of items — the
+        # ship's name is the chunk heading, so emit that single name and move on.
+        if c.category == "transport" and is_ship_statblock(rows):
+            ship = c.section.split("›")[-1].strip()
+            if _is_catalog_name(ship):
+                names[(c.game, c.category)].setdefault(ship.lower(), ship)
+            continue
         if len(rows) < 3 or len(rows[0]) < 4:
             continue
         nc = _name_col(rows)
