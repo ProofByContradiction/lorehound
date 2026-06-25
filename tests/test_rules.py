@@ -404,5 +404,60 @@ class TestTableTopic(unittest.TestCase):
         self.assertEqual(table_topic("pdf", "Mustering Out Benefits"), "Character")
 
 
+class _Doc:
+    def __init__(self, name, text, tables=None):
+        self.name, self.text, self.tables = name, text, tables or []
+
+
+class _FakeDrive:
+    def __init__(self, docs):
+        self._docs = docs
+
+    def fetch_all(self, force=False):
+        return self._docs
+
+
+class TestIndexingStatus(unittest.TestCase):
+    """The indexing flag gates flows (chargen) and the warning UI; the rebuild
+    swaps a freshly-built index in atomically."""
+
+    def _service(self):
+        from lorehound.rules import RulesService
+
+        doc = _Doc(
+            "Twilight: 2000/Core.pdf",
+            "## Combat\nFiring a weapon in melee combat needs a close-quarters check.\n",
+        )
+        return RulesService(_FakeDrive([doc]))
+
+    def test_flag_clear_and_ready_after_refresh(self):
+        svc = self._service()
+        self.assertFalse(svc.indexing)
+        self.assertFalse(svc.ready)            # nothing indexed yet
+        summary = svc.refresh()
+        self.assertFalse(svc.indexing)         # cleared in finally
+        self.assertTrue(svc.ready)             # a non-empty index now exists
+        self.assertGreaterEqual(summary["chunks"], 1)
+
+    def test_refresh_swaps_a_fresh_index_object(self):
+        svc = self._service()
+        svc.refresh()
+        first = svc.index
+        svc.refresh()
+        self.assertIsNot(svc.index, first)     # rebuilt off to the side, then swapped
+
+    def test_indexing_flag_resets_on_error(self):
+        from lorehound.rules import RulesService
+
+        class _Boom:
+            def fetch_all(self, force=False):
+                raise RuntimeError("drive down")
+
+        svc = RulesService(_Boom())
+        with self.assertRaises(RuntimeError):
+            svc.refresh()
+        self.assertFalse(svc.indexing)         # cleared even on failure
+
+
 if __name__ == "__main__":
     unittest.main()
