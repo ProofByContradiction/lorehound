@@ -512,32 +512,59 @@ class RulesService:
         self.careers: dict[str, dict[str, Career]] = {}
         # Catalog item names per (game, category) for /item and /transport pickers.
         self._catalog: dict[tuple[str, str], list[str]] = {}
+        # True while refresh() is rebuilding the index (cold-start warm or /reindex).
+        # The prior index stays live and queryable throughout; this only lets the UI
+        # warn that data may change shortly and gate flows (chargen) that want a
+        # stable snapshot. See ``ready`` / ``indexing``.
+        self._indexing = False
 
     @property
     def ready(self) -> bool:
+        """True once a non-empty index exists (queryable). Stays True across a
+        re-index — the old index is swapped out only when the new one is built."""
         return not self.index.is_empty
+
+    @property
+    def indexing(self) -> bool:
+        """True while a refresh is downloading/extracting/building. Reads still work
+        (old index is live); a feature wanting a stable view should wait."""
+        return self._indexing
 
     def refresh(self, force: bool = False) -> dict:
         """(Re)download from Drive and rebuild the index. Returns a summary.
 
         ``force=True`` re-extracts every file from scratch (ignores the cache),
-        for picking up changed extraction code without a version bump."""
+        for picking up changed extraction code without a version bump.
+
+        The new index/careers/catalog are built off to the side and swapped in
+        atomically at the end, so concurrent readers always see a complete index —
+        either the old one or the new one, never a half-built mix."""
         if self.drive is None:
             raise RuntimeError("Google Drive is not configured.")
-        docs = self.drive.fetch_all(force=force)
-        chunks: list[Chunk] = []
-        for doc in docs:
-            chunks.extend(_chunks_for_doc(doc.name, doc.text))
-            chunks.extend(_tables_for_doc(doc.name, doc.tables))
-        self.index.build(chunks)
-        self.careers = detect_careers(chunks)
-        self._catalog = _build_catalog_names(chunks)
-        return {
-            "documents": len(docs),
-            "chunks": len(chunks),
-            "games": self.index.files_by_game,
-            "careers": sum(len(v) for v in self.careers.values()),
-        }
+        self._indexing = True
+        try:
+            docs = self.drive.fetch_all(force=force)
+            chunks: list[Chunk] = []
+            for doc in docs:
+                chunks.extend(_chunks_for_doc(doc.name, doc.text))
+                chunks.extend(_tables_for_doc(doc.name, doc.tables))
+            index = SearchIndex()
+            index.build(chunks)
+            careers = detect_careers(chunks)
+            catalog = _build_catalog_names(chunks)
+            # Atomic swap: reference assignment is safe under the GIL, so a reader on
+            # the event-loop thread sees the old index until this point, then the new.
+            self.index = index
+            self.careers = careers
+            self._catalog = catalog
+            return {
+                "documents": len(docs),
+                "chunks": len(chunks),
+                "games": self.index.files_by_game,
+                "careers": sum(len(v) for v in self.careers.values()),
+            }
+        finally:
+            self._indexing = False
 
     def catalog_names(self, game: str, category: str) -> list[str]:
         """Sorted item names for a game's weapon/vehicle catalogs (autocomplete)."""
