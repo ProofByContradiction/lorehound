@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 
-from ..twilight import rating_to_sides
+from ..twilight import SUCCESS_THRESHOLD, rating_to_sides
 from .data import T2KData, build_t2k_data
 from .model import Option, Step, StepKind
 from .registry import SystemChargen, register
@@ -42,10 +42,10 @@ MAX_TERMS = 4                # career terms before the mandatory "At War" term
 RANGED_COMBAT = "Ranged Combat"  # first term must train this (T2K life-path rule)
 
 _FIDELITY_NOTE = (
-    "Attributes and childhood follow the rules-as-written (C baseline, 2D3 "
-    "increases, CUF D; childhood class grants a skill). The per-term specialty "
-    "skill-roll and aging aren't modelled yet, and per-term skill gains are "
-    "simplified — confirm those against your table."
+    "Attributes, childhood, and the per-term specialty check follow the "
+    "rules-as-written (C baseline, 2D3 increases, CUF D; childhood class grants a "
+    "skill; 6+ skill roll earns a specialty). Aging isn't modelled yet and per-term "
+    "skill gains are slightly simplified — confirm those against your table."
 )
 
 
@@ -174,14 +174,7 @@ def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
 
         spec_name = ""
         if career.specialties:
-            sp = yield Step(
-                f"spec_{term}", StepKind.CHOICE,
-                f"Term {term}: pick a {career.name} specialty",
-                options=[Option(name, name) for _roll, name in career.specialties],
-            )
-            spec_name = sp.value
-            if spec_name and spec_name not in draft.specialties:
-                draft.specialties.append(spec_name)
+            spec_name = yield from _term_specialty(ctx, draft, career, known, term)
 
         draft.gear = list(career.gear)  # most recent posting determines starting gear
         draft.career_history.append(career.name + (f" ({spec_name})" if spec_name else ""))
@@ -194,6 +187,29 @@ def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
             )
             if cont.value == "no":
                 break
+
+
+def _term_specialty(ctx, draft, career, known: dict[str, str], term: int):
+    """Earn a specialty with a skill check: roll your best trained career-skill die;
+    on 6+ choose one of the career's specialties (the book lets you roll or choose).
+    A failed check means no specialty that term."""
+    trained = [known[s] for s in career.skills if s in known]
+    die = max((rating_to_sides(r) for r in trained), default=rating_to_sides("D"))
+    roll = yield Step(
+        f"spec_check_{term}", StepKind.ROLL,
+        f"Term {term}: specialty check — roll your best {career.name} skill",
+        roll_spec=f"d{die}", detail=f"{SUCCESS_THRESHOLD}+ earns a specialty.",
+    )
+    if (roll.total or 0) < SUCCESS_THRESHOLD:
+        ctx.log(f"Specialty check failed (rolled {roll.total}).")
+        return ""
+    sp = yield Step(
+        f"spec_{term}", StepKind.CHOICE, f"Term {term}: specialty earned — pick one",
+        options=[Option(name, name) for _roll, name in career.specialties],
+    )
+    if sp.value and sp.value not in draft.specialties:
+        draft.specialties.append(sp.value)
+    return sp.value
 
 
 def _at_war(ctx, draft, known: dict[str, str]):

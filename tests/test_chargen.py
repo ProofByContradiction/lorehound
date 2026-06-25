@@ -271,6 +271,32 @@ class TestT2KFlow(unittest.TestCase):
             any(sk in s.draft.skills for sk in ("Close Combat", "Recon", "Mobility"))
         )
 
+    def _drive_with_roll(self, total):
+        from lorehound.chargen.engine import QUICK, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+        rng = random.Random(2)
+        s = ChargenSession(
+            t2k_flow, mode=QUICK, draft=CharacterDraft(game="Twilight: 2000"),
+            data=self._data(),
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=total),
+            rng=rng,
+        )
+        for _ in range(500):
+            if s.current is None:
+                break
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        return s.draft
+
+    def test_specialty_requires_passing_skill_roll(self):
+        # Every skill roll fails (1 < 6): no specialty is earned in any term.
+        self.assertEqual(self._drive_with_roll(1).specialties, [])
+
+    def test_specialty_earned_when_roll_succeeds(self):
+        # Every skill roll succeeds (12): at least one specialty is earned.
+        self.assertTrue(self._drive_with_roll(12).specialties)
+
 
 class TestT2KProse(unittest.TestCase):
     """The childhood D6 table is parsed from the book's prose (blank-line-delimited
