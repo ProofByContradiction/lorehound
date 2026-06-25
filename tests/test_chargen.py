@@ -169,20 +169,21 @@ class TestT2KData(unittest.TestCase):
 class TestT2KFlow(unittest.TestCase):
     """The T2K life-path flow, driven end-to-end over synthetic career data."""
 
-    def _data(self, *, single=False):
+    def _data(self, *, single=False, childhood=False):
         from lorehound.chargen.data import T2KCareer, T2KData
         combat = T2KCareer(
             name="Combat Arms", rank="Private",
             skills=["Ranged Combat", "Recon", "Close Combat"],
             specialties=[("1", "Rifleman"), ("2", "Tanker")], gear=["Assault rifle", "Knife"],
         )
+        ch = [("Street Kid", ["Close Combat", "Recon", "Mobility"])] if childhood else []
         if single:
-            return T2KData(game="Twilight: 2000", careers=[combat])
+            return T2KData(game="Twilight: 2000", careers=[combat], childhood=ch)
         doctor = T2KCareer(
             name="Doctor", skills=["Medical Aid", "Persuasion"],
             specialties=[("1", "Combat Medic")], gear=["Medkit"],
         )
-        return T2KData(game="Twilight: 2000", careers=[combat, doctor])
+        return T2KData(game="Twilight: 2000", careers=[combat, doctor], childhood=ch)
 
     def _drive(self, mode, data, seed=3):
         from lorehound.chargen.engine import ChargenSession
@@ -260,6 +261,46 @@ class TestT2KFlow(unittest.TestCase):
         self.assertEqual(steps_up, 4)
         self.assertTrue(all(ladder.index(v) >= ladder.index("C") for v in s.draft.attributes.values()))
         self.assertEqual(s.draft.derived["Coolness Under Fire"], "D")
+
+
+    def test_childhood_trains_a_class_skill(self):
+        from lorehound.chargen.engine import FAITHFUL
+        s, _ = self._drive(FAITHFUL, self._data(single=True, childhood=True))
+        self.assertEqual(s.draft.notes.get("Childhood"), "Street Kid")
+        self.assertTrue(
+            any(sk in s.draft.skills for sk in ("Close Combat", "Recon", "Mobility"))
+        )
+
+
+class TestT2KProse(unittest.TestCase):
+    """The childhood D6 table is parsed from the book's prose (blank-line-delimited
+    skill triples), not from a structured table."""
+
+    SAMPLE = (
+        "blah CHILDHOOD**\n\n**D6** **1. STREET KID** **2. SMALL TOWN** **3. WORKING** "
+        "**4. INTELLECTUAL** **5. MILITARY** **6. AFFLUENCE**\n**CLASS** **FAMILY**\n\n\n\n"
+        "**SKILLS** Close Combat,\nMobility,\nRecon\n\n\n\n"
+        "Driving, Ranged\nCombat,\nSurvival\n\n\n\n"
+        "Close Combat,\nStamina,\nTech\n\n\n\n"
+        "Tech,\nMedical Aid,\nPersuasion\n\n\n\n"
+        "Stamina,\nMobility,\nRanged Combat\n\n\n\n"
+        "Mobility,\nCommand,\nPersuasion\n\n\n\n## MILITARY SERVICE\nMore prose…"
+    )
+
+    def test_parses_six_classes_with_skills(self):
+        from lorehound.chargen.t2k_prose import parse_childhood
+        got = parse_childhood(self.SAMPLE)
+        names = [c for c, _ in got]
+        self.assertEqual(
+            names, ["Street Kid", "Small Town", "Working", "Intellectual", "Military", "Affluence"]
+        )
+        self.assertEqual(dict(got)["Street Kid"], ["Close Combat", "Mobility", "Recon"])
+        self.assertEqual(dict(got)["Small Town"], ["Driving", "Ranged Combat", "Survival"])
+
+    def test_missing_block_returns_empty(self):
+        from lorehound.chargen.t2k_prose import extract_t2k_prose, parse_childhood
+        self.assertEqual(parse_childhood("no childhood here"), [])
+        self.assertEqual(extract_t2k_prose("nothing relevant"), {})
 
 
 class TestRegistration(unittest.TestCase):

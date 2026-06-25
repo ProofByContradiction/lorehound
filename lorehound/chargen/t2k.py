@@ -24,6 +24,7 @@ from ..twilight import rating_to_sides
 from .data import T2KData, build_t2k_data
 from .model import Option, Step, StepKind
 from .registry import SystemChargen, register
+from .t2k_prose import extract_t2k_prose
 
 ATTRIBUTES = ("STR", "AGL", "INT", "EMP")
 _ATTR_LADDER = ["D", "C", "B", "A"]    # ascending; A is best
@@ -41,9 +42,10 @@ MAX_TERMS = 4                # career terms before the mandatory "At War" term
 RANGED_COMBAT = "Ranged Combat"  # first term must train this (T2K life-path rule)
 
 _FIDELITY_NOTE = (
-    "Attributes use the rules-as-written (C baseline, 2D3 increases, CUF D). "
-    "Childhood, the specialty skill-roll, and aging aren't modelled yet, and "
-    "per-term skill gains are simplified — confirm those against your table."
+    "Attributes and childhood follow the rules-as-written (C baseline, 2D3 "
+    "increases, CUF D; childhood class grants a skill). The per-term specialty "
+    "skill-roll and aging aren't modelled yet, and per-term skill gains are "
+    "simplified — confirm those against your table."
 )
 
 
@@ -71,6 +73,7 @@ def t2k_flow(ctx):  # -> Flow (generator)
 
     yield from _attributes(ctx, data, draft)
     known: dict[str, str] = {}            # trained skill -> rating (untrained omitted)
+    yield from _childhood(ctx, data, draft, known)
     yield from _career_terms(ctx, data, draft, known)
     yield from _at_war(ctx, draft, known)
 
@@ -108,6 +111,27 @@ def _attributes(ctx, data: T2KData, draft):
             options=options,
         )
         draft.attributes[pick.value] = _step_up(draft.attributes[pick.value], _ATTR_LADDER)
+
+
+def _childhood(ctx, data: T2KData, draft, known: dict[str, str]):
+    """The childhood D6 table: a class (upbringing) grants a starting skill trained
+    to D. The class set + its skills come from the prose-parsed index data; skipped
+    cleanly if that book has no childhood table indexed."""
+    if not data.has_childhood:
+        return
+    pick = yield Step(
+        "childhood", StepKind.CHOICE, "Childhood — what was your upbringing?",
+        options=[Option(name, name, ", ".join(skills)) for name, skills in data.childhood],
+        essential=True, detail="Your background trains one skill to D.",
+    )
+    cls = next((c for c in data.childhood if c[0] == pick.value), data.childhood[0])
+    draft.notes["Childhood"] = cls[0]
+    skill = yield Step(
+        "childhood_skill", StepKind.CHOICE,
+        f"{cls[0]} childhood — train one skill to D",
+        options=[Option(s, s) for s in cls[1]],
+    )
+    _bump_skill(known, skill.value, ctx)
 
 
 def _bump_skill(known: dict[str, str], skill: str, ctx) -> None:
@@ -229,5 +253,6 @@ register(
         games=("twilight", "t2k", "2000"),
         build_flow=t2k_flow,
         build_data=build_t2k_data,
+        extract_prose=extract_t2k_prose,
     )
 )

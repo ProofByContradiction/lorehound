@@ -512,6 +512,9 @@ class RulesService:
         self.careers: dict[str, dict[str, Career]] = {}
         # Catalog item names per (game, category) for /item and /transport pickers.
         self._catalog: dict[tuple[str, str], list[str]] = {}
+        # Per-game chargen aux data parsed from document prose at index time (e.g.
+        # the T2K childhood table), for flows that need tables find_tables can't see.
+        self.chargen_aux: dict[str, dict] = {}
         # True while refresh() is rebuilding the index (cold-start warm or /reindex).
         # The prior index stays live and queryable throughout; this only lets the UI
         # warn that data may change shortly and gate flows (chargen) that want a
@@ -541,13 +544,24 @@ class RulesService:
         either the old one or the new one, never a half-built mix."""
         if self.drive is None:
             raise RuntimeError("Google Drive is not configured.")
+        from .chargen.registry import chargen_for
+
         self._indexing = True
         try:
             docs = self.drive.fetch_all(force=force)
             chunks: list[Chunk] = []
+            aux: dict[str, dict] = {}
             for doc in docs:
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
                 chunks.extend(_tables_for_doc(doc.name, doc.tables))
+                # Parse any prose-only chargen tables (e.g. T2K childhood) for games
+                # with a chargen system, so the flow can read them from the index.
+                game, _book = _split_game_and_file(doc.name)
+                system = chargen_for(game)
+                if system is not None and system.extract_prose is not None:
+                    parsed = system.extract_prose(doc.text)
+                    if parsed:
+                        aux.setdefault(game, {}).update(parsed)
             index = SearchIndex()
             index.build(chunks)
             careers = detect_careers(chunks)
@@ -557,6 +571,7 @@ class RulesService:
             self.index = index
             self.careers = careers
             self._catalog = catalog
+            self.chargen_aux = aux
             return {
                 "documents": len(docs),
                 "chunks": len(chunks),
