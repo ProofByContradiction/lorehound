@@ -273,6 +273,54 @@ class TestExplodeToItems(unittest.TestCase):
         self.assertEqual(_category("Core.pdf", "Weapons, Vehicles & Gear", "US Weapons"), "items")
 
 
+class TestPostClassificationStages(unittest.TestCase):
+    """The post-build refinement is three ordered, named stages; the order is
+    load-bearing (re-tag promotes, then the chargen guard claws chargen back,
+    then reference clutter is judged over what's still 'rules')."""
+
+    def test_retag_by_content_propagates_across_a_section(self):
+        from lorehound.rules import _retag_by_content
+
+        # Two chunks share a section key; one body carries a weapon stat table, so
+        # both the table chunk and its sibling prose move to items.
+        table = Chunk("T2K", "Core", "rules", "Combat › Rifles", "p. 5",
+                      "| WEAPON | ROF |\n| M16 | 5 |")
+        prose = Chunk("T2K", "Core", "rules", "Combat › Rifles", "p. 5",
+                      "The M16 is the standard issue rifle.")
+        keys = ["Combat › Rifles", "Combat › Rifles"]
+        _retag_by_content([table, prose], keys)
+        self.assertEqual(table.category, "items")
+        self.assertEqual(prose.category, "items")        # propagated to the sibling
+
+    def test_guard_chargen_runs_after_retag(self):
+        from lorehound.rules import _guard_chargen, _retag_by_content
+
+        # A weapon table under a character-creation chapter: stage 1 promotes it to
+        # items, stage 2 must claw it back to rules (its gear mentions are chargen).
+        ch = Chunk("T2K", "Core", "rules", "Player Characters › Starting Gear", "p. 9",
+                   "| WEAPON | ROF |\n| M16 | 5 |")
+        keys = ["Player Characters › Starting Gear"]
+        _retag_by_content([ch], keys)
+        self.assertEqual(ch.category, "items")           # stage 1 promoted it
+        _guard_chargen([ch])
+        self.assertEqual(ch.category, "rules")           # stage 2 clawed it back
+
+    def test_reference_clutter_retags_index_and_number_dense(self):
+        from lorehound.rules import _retag_reference_clutter
+
+        index_leaf = Chunk("T2K", "Core", "rules", "Index › A", "p. 200",
+                           "Aardvark Ambush Armor Assault")
+        numbers = Chunk("T2K", "Core", "rules", "Combat › Tables", "p. 50",
+                        " ".join(["1", "2", "3", "4", "5", "12", "20", "6",
+                                  "hits", "8", "9", "10", "11"]))
+        keeper = Chunk("T2K", "Core", "rules", "Combat › Rules", "p. 40",
+                       "Roll under your skill to hit the target in melee combat.")
+        _retag_reference_clutter([index_leaf, numbers, keeper])
+        self.assertEqual(index_leaf.category, "reference")   # single-letter leaf
+        self.assertEqual(numbers.category, "reference")      # number-dense
+        self.assertEqual(keeper.category, "rules")           # genuine rule untouched
+
+
 class TestItemCard(unittest.TestCase):
     def test_single_item_stat_card(self):
         from lorehound.tables import render_item

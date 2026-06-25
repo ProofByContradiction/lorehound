@@ -159,9 +159,17 @@ _CHARGEN = re.compile(
 )
 
 
+def _is_chargen(*texts: str) -> bool:
+    """True if any of ``texts`` (a chapter/book/section name) marks character-
+    creation content. Single definition of the chargen guard, shared by the
+    build-time classifier and the post-pass that protects chargen prose from the
+    body-driven gear/vehicle re-tag."""
+    return any(_CHARGEN.search(t or "") for t in texts)
+
+
 def _category(book: str, chapter: str, section: str) -> str:
     """Classify as 'rules', 'items', or 'transport' from the most specific heading."""
-    if _CHARGEN.search(chapter or "") or _CHARGEN.search(book or ""):
+    if _is_chargen(chapter, book):
         return "rules"  # character-creation content is chargen rules, not gear
     for text in (section, chapter, book):
         if not text:
@@ -287,8 +295,20 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
                 flush()
     flush()
 
-    # Refine: a section containing a weapon/vehicle stat table is gear/vehicles.
-    # Propagate to every chunk in that section so the prose write-ups move too.
+    # Post-classification refinement runs as ordered stages over the built chunks.
+    # The order is load-bearing: the body-driven re-tag can promote a chunk to
+    # items/transport, so the chargen guard must run AFTER it to claw chargen prose
+    # back, and reference clutter is judged last (only over what's still 'rules').
+    _retag_by_content(chunks, sec_keys)
+    _guard_chargen(chunks)
+    _retag_reference_clutter(chunks)
+    return chunks
+
+
+def _retag_by_content(chunks: list[Chunk], sec_keys: list[str]) -> None:
+    """Stage 1 — a section containing a weapon/vehicle stat table is gear/vehicles.
+    Propagate the body signal to every chunk sharing the section key, so the prose
+    write-ups move with it (transport wins ties); keyless chunks retag in place."""
     section_cat: dict[str, str] = {}
     for ch, key in zip(chunks, sec_keys, strict=True):
         sig = _content_category(ch.text)
@@ -303,17 +323,22 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
         if key and key in section_cat:
             ch.category = section_cat[key]
 
-    # Character-creation prose must not land in /item or /transport even when the
-    # content re-tag above flagged it (its gear/weapon mentions are chargen, not a
-    # catalogue) — force it back to rules.
+
+def _guard_chargen(chunks: list[Chunk]) -> None:
+    """Stage 2 — character-creation prose must not land in /item or /transport even
+    when stage 1 flagged it (its gear/weapon mentions are chargen, not a catalogue)
+    — force it back to rules."""
     for ch in chunks:
         chapter = ch.section.split("›")[0].strip() if ch.section else ""
-        if ch.category in ("items", "transport") and _CHARGEN.search(chapter):
+        if ch.category in ("items", "transport") and _is_chargen(chapter):
             ch.category = "rules"
 
-    # Keep the book's alphabetical index and leftover page-footer fragments out
-    # of rule lookups: a single-letter section leaf, or a long number-dense chunk,
-    # is reference clutter, not a rule. Retag so /rule|/item|/transport skip it.
+
+def _retag_reference_clutter(chunks: list[Chunk]) -> None:
+    """Stage 3 — keep the book's alphabetical index and leftover page-footer
+    fragments out of rule lookups: a single-letter section leaf, or a long
+    number-dense chunk, is reference clutter, not a rule. Retag (over chunks still
+    'rules') so /rule|/item|/transport skip it."""
     for ch in chunks:
         if ch.category != "rules":
             continue
@@ -324,7 +349,6 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
             digit_frac >= 0.30 and len(toks) >= 12
         ):
             ch.category = "reference"
-    return chunks
 
 
 def _table_name(title: str, section: str, rows: list[list[str]]) -> str:
