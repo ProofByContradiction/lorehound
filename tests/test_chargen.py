@@ -88,6 +88,31 @@ class TestFaithfulMode(unittest.TestCase):
         self.assertFalse(s.complete)
 
 
+class TestBack(unittest.TestCase):
+    def test_cannot_back_from_first_step(self):
+        s = _session(FAITHFUL)
+        self.assertEqual(s.current.id, "method")
+        self.assertFalse(s.can_back)
+        self.assertEqual(s.back().id, "method")    # no-op
+
+    def test_back_replays_earlier_answers_and_undoes_later(self):
+        s = _session(FAITHFUL)            # method → attr(roll) → brief → spec
+        s.resolve("lifepath")             # now at the attr roll
+        s.resolve(None)                   # roll attr (fixed 7) → at brief
+        self.assertEqual(s.current.id, "brief")
+        self.assertEqual(s.draft.attributes.get("STR"), "7")
+        self.assertTrue(s.can_back)
+
+        back = s.back()                   # rewind to the attr roll
+        self.assertEqual(back.id, "attr")
+        self.assertEqual(s.draft.method, "lifepath")   # earlier choice replayed
+        self.assertNotIn("STR", s.draft.attributes)     # the later roll was undone
+
+        s.resolve(None)                   # re-roll the attr (deterministic: 7)
+        self.assertEqual(s.current.id, "brief")
+        self.assertEqual(s.draft.attributes.get("STR"), "7")
+
+
 class TestModeGuard(unittest.TestCase):
     def test_unknown_mode_rejected(self):
         with self.assertRaises(ValueError):
@@ -107,6 +132,16 @@ class TestRender(unittest.TestCase):
         draft = CharacterDraft(game="Test", attributes={"STR": "B"})
         self.assertIn("STR", draft_summary(draft))
         self.assertEqual(draft_summary(CharacterDraft(game="Test")), "")  # nothing yet
+
+    def test_sheet_has_ansi_stat_block(self):
+        draft = CharacterDraft(
+            game="Test", attributes={"STR": "B", "AGL": "C", "INT": "A", "EMP": "D"},
+            derived={"Hit Capacity": "5"},
+        )
+        sheet = character_sheet(draft)
+        self.assertIn("```ansi", sheet)       # attributes render as a colour block
+        self.assertIn("STR", sheet)
+        self.assertIn("Hit", sheet)           # derived abbreviated in the block
 
 
 class TestT2KData(unittest.TestCase):
