@@ -88,6 +88,31 @@ class TestFaithfulMode(unittest.TestCase):
         self.assertFalse(s.complete)
 
 
+class TestBack(unittest.TestCase):
+    def test_cannot_back_from_first_step(self):
+        s = _session(FAITHFUL)
+        self.assertEqual(s.current.id, "method")
+        self.assertFalse(s.can_back)
+        self.assertEqual(s.back().id, "method")    # no-op
+
+    def test_back_replays_earlier_answers_and_undoes_later(self):
+        s = _session(FAITHFUL)            # method → attr(roll) → brief → spec
+        s.resolve("lifepath")             # now at the attr roll
+        s.resolve(None)                   # roll attr (fixed 7) → at brief
+        self.assertEqual(s.current.id, "brief")
+        self.assertEqual(s.draft.attributes.get("STR"), "7")
+        self.assertTrue(s.can_back)
+
+        back = s.back()                   # rewind to the attr roll
+        self.assertEqual(back.id, "attr")
+        self.assertEqual(s.draft.method, "lifepath")   # earlier choice replayed
+        self.assertNotIn("STR", s.draft.attributes)     # the later roll was undone
+
+        s.resolve(None)                   # re-roll the attr (deterministic: 7)
+        self.assertEqual(s.current.id, "brief")
+        self.assertEqual(s.draft.attributes.get("STR"), "7")
+
+
 class TestModeGuard(unittest.TestCase):
     def test_unknown_mode_rejected(self):
         with self.assertRaises(ValueError):
@@ -107,6 +132,16 @@ class TestRender(unittest.TestCase):
         draft = CharacterDraft(game="Test", attributes={"STR": "B"})
         self.assertIn("STR", draft_summary(draft))
         self.assertEqual(draft_summary(CharacterDraft(game="Test")), "")  # nothing yet
+
+    def test_sheet_has_ansi_stat_block(self):
+        draft = CharacterDraft(
+            game="Test", attributes={"STR": "B", "AGL": "C", "INT": "A", "EMP": "D"},
+            derived={"Hit Capacity": "5"},
+        )
+        sheet = character_sheet(draft)
+        self.assertIn("```ansi", sheet)       # attributes render as a colour block
+        self.assertIn("STR", sheet)
+        self.assertIn("Hit", sheet)           # derived abbreviated in the block
 
 
 class TestT2KData(unittest.TestCase):
@@ -169,20 +204,21 @@ class TestT2KData(unittest.TestCase):
 class TestT2KFlow(unittest.TestCase):
     """The T2K life-path flow, driven end-to-end over synthetic career data."""
 
-    def _data(self, *, single=False):
+    def _data(self, *, single=False, childhood=False):
         from lorehound.chargen.data import T2KCareer, T2KData
         combat = T2KCareer(
             name="Combat Arms", rank="Private",
             skills=["Ranged Combat", "Recon", "Close Combat"],
             specialties=[("1", "Rifleman"), ("2", "Tanker")], gear=["Assault rifle", "Knife"],
         )
+        ch = [("Street Kid", ["Close Combat", "Recon", "Mobility"])] if childhood else []
         if single:
-            return T2KData(game="Twilight: 2000", careers=[combat])
+            return T2KData(game="Twilight: 2000", careers=[combat], childhood=ch)
         doctor = T2KCareer(
             name="Doctor", skills=["Medical Aid", "Persuasion"],
             specialties=[("1", "Combat Medic")], gear=["Medkit"],
         )
-        return T2KData(game="Twilight: 2000", careers=[combat, doctor])
+        return T2KData(game="Twilight: 2000", careers=[combat, doctor], childhood=ch)
 
     def _drive(self, mode, data, seed=3):
         from lorehound.chargen.engine import ChargenSession
@@ -260,6 +296,80 @@ class TestT2KFlow(unittest.TestCase):
         self.assertEqual(steps_up, 4)
         self.assertTrue(all(ladder.index(v) >= ladder.index("C") for v in s.draft.attributes.values()))
         self.assertEqual(s.draft.derived["Coolness Under Fire"], "D")
+
+
+    def test_childhood_trains_a_class_skill(self):
+        from lorehound.chargen.engine import FAITHFUL
+        s, _ = self._drive(FAITHFUL, self._data(single=True, childhood=True))
+        self.assertEqual(s.draft.notes.get("Childhood"), "Street Kid")
+        self.assertTrue(
+            any(sk in s.draft.skills for sk in ("Close Combat", "Recon", "Mobility"))
+        )
+
+    def _drive_with_roll(self, total):
+        from lorehound.chargen.engine import QUICK, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+        rng = random.Random(2)
+        s = ChargenSession(
+            t2k_flow, mode=QUICK, draft=CharacterDraft(game="Twilight: 2000"),
+            data=self._data(),
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=total),
+            rng=rng,
+        )
+        for _ in range(500):
+            if s.current is None:
+                break
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        return s.draft
+
+    def test_specialty_requires_passing_skill_roll(self):
+        # Every skill roll fails (1 < 6): no specialty is earned in any term.
+        self.assertEqual(self._drive_with_roll(1).specialties, [])
+
+    def test_specialty_earned_when_roll_succeeds(self):
+        # Every skill roll succeeds (12): at least one specialty is earned.
+        self.assertTrue(self._drive_with_roll(12).specialties)
+
+    def test_age_is_tracked(self):
+        from lorehound.chargen.engine import QUICK
+        s, _ = self._drive(QUICK, self._data())
+        age = int(s.draft.notes["Age"])
+        self.assertGreaterEqual(age, 18)              # starts at 18
+        if s.draft.career_history:
+            self.assertGreater(age, 18)               # each served term ages you
+
+
+class TestT2KProse(unittest.TestCase):
+    """The childhood D6 table is parsed from the book's prose (blank-line-delimited
+    skill triples), not from a structured table."""
+
+    SAMPLE = (
+        "blah CHILDHOOD**\n\n**D6** **1. STREET KID** **2. SMALL TOWN** **3. WORKING** "
+        "**4. INTELLECTUAL** **5. MILITARY** **6. AFFLUENCE**\n**CLASS** **FAMILY**\n\n\n\n"
+        "**SKILLS** Close Combat,\nMobility,\nRecon\n\n\n\n"
+        "Driving, Ranged\nCombat,\nSurvival\n\n\n\n"
+        "Close Combat,\nStamina,\nTech\n\n\n\n"
+        "Tech,\nMedical Aid,\nPersuasion\n\n\n\n"
+        "Stamina,\nMobility,\nRanged Combat\n\n\n\n"
+        "Mobility,\nCommand,\nPersuasion\n\n\n\n## MILITARY SERVICE\nMore prose…"
+    )
+
+    def test_parses_six_classes_with_skills(self):
+        from lorehound.chargen.t2k_prose import parse_childhood
+        got = parse_childhood(self.SAMPLE)
+        names = [c for c, _ in got]
+        self.assertEqual(
+            names, ["Street Kid", "Small Town", "Working", "Intellectual", "Military", "Affluence"]
+        )
+        self.assertEqual(dict(got)["Street Kid"], ["Close Combat", "Mobility", "Recon"])
+        self.assertEqual(dict(got)["Small Town"], ["Driving", "Ranged Combat", "Survival"])
+
+    def test_missing_block_returns_empty(self):
+        from lorehound.chargen.t2k_prose import extract_t2k_prose, parse_childhood
+        self.assertEqual(parse_childhood("no childhood here"), [])
+        self.assertEqual(extract_t2k_prose("nothing relevant"), {})
 
 
 class TestRegistration(unittest.TestCase):

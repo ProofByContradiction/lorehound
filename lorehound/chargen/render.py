@@ -7,6 +7,33 @@ from __future__ import annotations
 
 from .model import CharacterDraft, Step, StepKind
 
+# Raw ANSI (kept local so this module stays Discord-free and unit-testable). Only
+# renders inside a ```ansi block — see _stat_block.
+_ESC = "\x1b"
+_RATING_COLOUR = {"A": "32", "B": "36", "C": "33", "D": "31"}  # green/cyan/yellow/red
+_DERIVED_SHORT = {
+    "Hit Capacity": "Hit", "Stress Capacity": "Stress", "Coolness Under Fire": "CUF",
+}
+
+
+def _paint(text: str, *codes: str) -> str:
+    return f"{_ESC}[{';'.join(codes)}m{text}{_ESC}[0m" if codes else text
+
+
+def _rating(value: str) -> str:
+    return _paint(value, "1", _RATING_COLOUR.get(value, "37"))
+
+
+def _stat_block(draft: CharacterDraft) -> str:
+    """An aligned, colour-coded ANSI block for the four attributes + derived stats.
+    Colour is applied after padding the plain text, so alignment holds."""
+    lines = [f"{name:<5}{_rating(draft.attributes.get(name, '-'))}"
+             for name in ("STR", "AGL", "INT", "EMP")]
+    if draft.derived:
+        lines.append("")
+        lines += [f"{_DERIVED_SHORT.get(k, k):<8}{v}" for k, v in draft.derived.items()]
+    return "```ansi\n" + "\n".join(lines) + "\n```"
+
 
 def _attr_line(attributes: dict[str, str]) -> str:
     if not attributes:
@@ -47,10 +74,8 @@ def character_sheet(draft: CharacterDraft) -> str:
     lines = [f"## {title}", f"-# {draft.game}"]
     if draft.method:
         lines.append(f"-# Built via {draft.method}")
-    lines.append("")
-    lines.append(f"**Attributes** — {_attr_line(draft.attributes)}")
-    if draft.derived:
-        lines.append("**Derived** — " + "  ".join(f"{k} {v}" for k, v in draft.derived.items()))
+    if draft.attributes:
+        lines.append(_stat_block(draft))
     if draft.rank:
         lines.append(f"**Rank** — {draft.rank}")
     if draft.career_history:

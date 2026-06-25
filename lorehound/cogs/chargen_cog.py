@@ -77,6 +77,25 @@ class _StepSelect(discord.ui.Select):
         await self._on_pick(interaction, self.values[0])
 
 
+class _NameModal(discord.ui.Modal, title="Name your character"):
+    """A short text prompt for the character's name, launched from the sheet."""
+
+    name = discord.ui.TextInput(
+        label="Character name", required=False, max_length=80,
+        placeholder="e.g. Sgt. Maria Ramos",
+    )
+
+    def __init__(self, view: ChargenView) -> None:
+        super().__init__()
+        self._view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        chosen = self.name.value.strip()
+        if chosen and self._view.session is not None:
+            self._view.session.draft.name = chosen
+        await self._view._swap(interaction, self._view.session)
+
+
 class ChargenView(discord.ui.LayoutView):
     """Ephemeral interactive character sheet. One instance per state; each transition
     builds a fresh view from the shared :class:`ChargenSession` and edits the message
@@ -154,12 +173,18 @@ class ChargenView(discord.ui.LayoutView):
             row.add_item(_Btn(self._make_advance(), "Continue",
                               style=discord.ButtonStyle.primary, emoji="▶️"))
         container.add_item(row)
+        # A Select fills its row, so Back goes on its own row underneath.
+        if self.session.can_back:
+            back_row = discord.ui.ActionRow()
+            back_row.add_item(_Btn(self._back, "Back", emoji="◀️"))
+            container.add_item(back_row)
 
     def _build_sheet(self, container: discord.ui.Container) -> None:
         assert self.session is not None
         container.add_item(ui.text(render.character_sheet(self.session.draft)))
         container.add_item(ui.separator())
         row = discord.ui.ActionRow()
+        row.add_item(_Btn(self._name, "Name", emoji="✏️"))
         row.add_item(_Btn(self._reroll, "Re-roll", emoji="🔄"))
         row.add_item(_Btn(self._share, "Show in channel",
                           style=discord.ButtonStyle.primary, emoji="📢"))
@@ -182,6 +207,14 @@ class ChargenView(discord.ui.LayoutView):
         assert self.session is not None
         self.session.resolve(value)
         await self._swap(interaction, self.session)
+
+    async def _back(self, interaction: discord.Interaction) -> None:
+        assert self.session is not None
+        self.session.back()
+        await self._swap(interaction, self.session)
+
+    async def _name(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_NameModal(self))
 
     async def _reroll(self, interaction: discord.Interaction) -> None:
         assert self.session is not None

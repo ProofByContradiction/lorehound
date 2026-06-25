@@ -84,6 +84,8 @@ class T2KData:
 
     game: str
     careers: list[T2KCareer] = field(default_factory=list)
+    # Childhood D6 classes: (class_name, [skill, skill, skill]); empty if not indexed.
+    childhood: list[tuple[str, list[str]]] = field(default_factory=list)
 
     def career(self, name: str) -> T2KCareer | None:
         nl = name.strip().lower()
@@ -93,11 +95,16 @@ class T2KData:
     def has_careers(self) -> bool:
         return bool(self.careers)
 
+    @property
+    def has_childhood(self) -> bool:
+        return bool(self.childhood)
+
 
 def build_t2k_data(rules, game: str) -> T2KData:
     """Snapshot the indexed careers for ``game`` into a :class:`T2KData`. Reads the
     structured-career index built at index time; flattens each into a T2KCareer.
-    Careers with no usable skills/specialties are dropped (low-quality detections)."""
+    Careers with no usable skills/specialties are dropped (low-quality detections).
+    Childhood comes from the prose-parsed ``chargen_aux``."""
     detected = rules.careers.get(game, {})
     careers: list[T2KCareer] = []
     for career in detected.values():
@@ -105,4 +112,6 @@ def build_t2k_data(rules, game: str) -> T2KData:
         if tc.skills or tc.specialties:   # needs at least something to build on
             careers.append(tc)
     careers.sort(key=lambda c: (not c.is_military, c.name))  # military first, then A→Z
-    return T2KData(game=game, careers=careers)
+    aux = getattr(rules, "chargen_aux", {}).get(game, {})
+    childhood = [(c, list(skills)) for c, skills in aux.get("childhood", [])]
+    return T2KData(game=game, careers=careers, childhood=childhood)
