@@ -166,5 +166,83 @@ class TestT2KData(unittest.TestCase):
         self.assertIsNotNone(data.career("doctor"))
 
 
+class TestT2KFlow(unittest.TestCase):
+    """The T2K life-path flow, driven end-to-end over synthetic career data."""
+
+    def _data(self, *, single=False):
+        from lorehound.chargen.data import T2KCareer, T2KData
+        combat = T2KCareer(
+            name="Combat Arms", rank="Private",
+            skills=["Ranged Combat", "Recon", "Close Combat"],
+            specialties=[("1", "Rifleman"), ("2", "Tanker")], gear=["Assault rifle", "Knife"],
+        )
+        if single:
+            return T2KData(game="Twilight: 2000", careers=[combat])
+        doctor = T2KCareer(
+            name="Doctor", skills=["Medical Aid", "Persuasion"],
+            specialties=[("1", "Combat Medic")], gear=["Medkit"],
+        )
+        return T2KData(game="Twilight: 2000", careers=[combat, doctor])
+
+    def _drive(self, mode, data, seed=3):
+        from lorehound.chargen.engine import ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+
+        rng = random.Random(seed)
+        s = ChargenSession(
+            t2k_flow, mode=mode, draft=CharacterDraft(game="Twilight: 2000"), data=data, rng=rng,
+        )
+        prompts = 0
+        for _ in range(500):  # safety cap against a non-advancing flow
+            if s.current is None:
+                break
+            prompts += 1
+            value = rng.choice(s.current.options).value if s.current.options else None
+            s.resolve(value)
+        return s, prompts
+
+    def test_quick_run_produces_valid_character(self):
+        from lorehound.chargen.engine import QUICK
+        s, _ = self._drive(QUICK, self._data())
+        d = s.draft
+        self.assertTrue(s.complete)
+        self.assertEqual(d.method, "Life Path")
+        self.assertEqual(set(d.attributes), {"STR", "AGL", "INT", "EMP"})
+        self.assertTrue(all(v in ("A", "B", "C", "D") for v in d.attributes.values()))
+        self.assertIn("Hit Capacity", d.derived)
+        self.assertIn("Stress Capacity", d.derived)
+        self.assertTrue(d.career_history)          # at least one term
+        self.assertIn("Nationality", d.notes)
+
+    def test_faithful_prompts_more_than_quick(self):
+        from lorehound.chargen.engine import FAITHFUL, QUICK
+        _, quick_prompts = self._drive(QUICK, self._data())
+        _, faithful_prompts = self._drive(FAITHFUL, self._data())
+        self.assertGreater(faithful_prompts, quick_prompts)
+
+    def test_first_term_trains_ranged_combat(self):
+        from lorehound.chargen.engine import FAITHFUL
+        s, _ = self._drive(FAITHFUL, self._data(single=True))
+        # The first term must train Ranged Combat when the career offers it.
+        self.assertIn("Ranged Combat", s.draft.skills)
+
+    def test_no_data_completes_with_note(self):
+        from lorehound.chargen.data import T2KData
+        from lorehound.chargen.engine import QUICK
+        s, _ = self._drive(QUICK, T2KData(game="Twilight: 2000", careers=[]))
+        self.assertTrue(s.complete)                # graceful, no crash
+        self.assertIn("Note", s.draft.notes)
+
+
+class TestRegistration(unittest.TestCase):
+    def test_t2k_system_registered(self):
+        from lorehound.chargen import registry
+        sc = registry.chargen_for("Twilight: 2000")
+        self.assertIsNotNone(sc)
+        self.assertTrue(sc.matches("T2K Core"))
+        self.assertIsNone(registry.chargen_for("Call of Cthulhu"))
+
+
 if __name__ == "__main__":
     unittest.main()

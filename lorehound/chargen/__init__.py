@@ -16,3 +16,5 @@ mechanics live in code, so no rulebook tables are committed to the repo.
 """
 
 from __future__ import annotations
+
+from . import t2k  # noqa: F401  — import for its side effect: registers the T2K system
