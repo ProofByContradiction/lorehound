@@ -206,6 +206,33 @@ class TestSourceProfiles(unittest.TestCase):
         self.assertFalse(prof.matches("Twilight 2000"))
 
 
+class TestCareerGeometry(unittest.TestCase):
+    """The Traveller career-spread layout coordinates were lifted out of the
+    reconstructor into CareerGeometry on the profile. Pin the Mongoose 2e values
+    to the originals so the relocation stays behaviour-neutral, and confirm the
+    profile actually carries the geometry the reconstructor reads."""
+
+    def test_mongoose_defaults_match_original_literals(self):
+        from lorehound.sources import CareerGeometry
+
+        g = CareerGeometry()  # the registered Mongoose layout = the defaults
+        self.assertEqual(g.left_band, (82.0, 560.0))
+        self.assertEqual(g.right_band, (310.0, 565.0))
+        self.assertEqual(g.roll_band, (70.0, 580.0))
+        self.assertEqual(g.column_split, 300.0)
+        self.assertEqual(g.ranks_heading_max, 400.0)
+        self.assertEqual(g.roll_index_max, 110.0)
+
+    def test_traveller_profile_carries_geometry(self):
+        import lorehound.pdf_tables  # noqa: F401 - registers the profile
+        from lorehound.sources import CareerGeometry, profile_for
+
+        p = profile_for("Traveller (Mongoose)")
+        self.assertIsNotNone(p)
+        self.assertIsInstance(p.career_geometry, CareerGeometry)
+        self.assertIs(p.career_detect, lorehound.pdf_tables.is_traveller_career_page)
+
+
 class TestTitle(unittest.TestCase):
     def test_words_acronyms_and_mixed(self):
         self.assertEqual(_title("FIREMAN"), "Fireman")

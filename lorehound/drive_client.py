@@ -343,7 +343,9 @@ class DriveClient:
                 except Exception:  # noqa: BLE001
                     continue
                 if prof.career_detect(page):
-                    career_pages[page_no] = prof.career_sections(page, page_no)
+                    career_pages[page_no] = prof.career_sections(
+                        page, page_no, prof.career_geometry
+                    )
         if career_pages:
             kept: list[dict] = []
             for t in raw:

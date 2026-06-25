@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+from .sources import CareerGeometry
+
 # A PyMuPDF "word" is the tuple (x0, y0, x1, y1, text, block, line, word); name
 # the fields we index so the geometry reads clearly instead of as bare numbers.
 WORD_X0, WORD_Y0, WORD_X1, WORD_Y1, WORD_TEXT = 0, 1, 2, 3, 4
@@ -406,6 +408,11 @@ _TRAV_SKILLS_A_HDR = ("Roll", "Personal Development", "Service Skills",
 _TRAV_NUM = re.compile(r"\d{1,2}$")
 _TRAV_UPPER = re.compile(r"^[A-Z][A-Z0-9 &/().,+-]*$")
 
+# The Mongoose 2e career-spread layout (CareerGeometry's defaults). Shared by the
+# section reconstructors below as their default ``geom`` and registered on the
+# Traveller profile; a differently-laid-out book supplies its own instead.
+_MONGOOSE_CAREER_GEOMETRY = CareerGeometry()
+
 
 def _trav_y_bands(words, tol: float = 4.0) -> list[float]:
     """Sorted row-band tops: y-coordinates collapsed so words on the same text
@@ -605,14 +612,14 @@ def _trav_words(page) -> list:
     return [w for w in _page_words(page) if w[WORD_TEXT].strip() and not in_heading(w)]
 
 
-def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
+def _trav_skills_sections(words, page_no, y_lo, y_hi, geom=_MONGOOSE_CAREER_GEOMETRY) -> list[dict]:
     """Reconstruct the "Skills and training" band into Table A (the universal
     Roll | Personal Development | Service Skills | Advanced Education grid) and, if
     present, Table B (the per-assignment specialist-skills grid). The two stack in
     one band; a second ``1D``-led uppercase row marks B's header, splitting them."""
     band = [w for w in words if y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
-    rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
+    rows = _trav_band_rows(words, geom.left_band[0], geom.left_band[1], y_lo, y_hi, starts)
     # Header rows: first cell "1D" with >=2 uppercase cells after it. The 1st is
     # Table A's header (universal skills), the 2nd starts Table B (specialists).
     hdr_idx = [
@@ -642,14 +649,14 @@ def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
     return out
 
 
-def _trav_ranks_section(words, page_no, y_lo, y_hi) -> list[dict]:
+def _trav_ranks_section(words, page_no, y_lo, y_hi, geom=_MONGOOSE_CAREER_GEOMETRY) -> list[dict]:
     """Reconstruct the "Ranks and bonuses" band: RANK | <category> | SKILL OR BONUS.
     A career can stack two rank tracks (e.g. Agent's enlisted vs intelligence), each
     with its own ``RANK``-led header; we keep them as one table (the inline second
     header reads fine as a sub-divider)."""
     band = [w for w in words if y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
-    rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
+    rows = _trav_band_rows(words, geom.left_band[0], geom.left_band[1], y_lo, y_hi, starts)
     rows = [r for r in rows if any(c.strip() for c in r)]
     rows = _trav_drop_empty_cols(rows)
     # Drop a leading orphan row that isn't the RANK header or a numbered rank.
@@ -681,12 +688,13 @@ def _trav_ranks_section(words, page_no, y_lo, y_hi) -> list[dict]:
     return [{"page": page_no, "title": "Ranks and bonuses", "rows": rows}]
 
 
-def _trav_progress_section(words, page_no, y_lo, y_hi) -> list[dict]:
+def _trav_progress_section(words, page_no, y_lo, y_hi, geom=_MONGOOSE_CAREER_GEOMETRY) -> list[dict]:
     """Reconstruct the "Career progress" survival/advancement table: a blank-headed
     assignment column then SURVIVAL and ADVANCEMENT (their checks per assignment)."""
-    band = [w for w in words if 310 <= w[WORD_X0] < 565 and y_lo <= w[WORD_Y0] < y_hi]
+    x_lo, x_hi = geom.right_band
+    band = [w for w in words if x_lo <= w[WORD_X0] < x_hi and y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=False)
-    rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
+    rows = _trav_drop_empty_cols(_trav_band_rows(words, x_lo, x_hi, y_lo, y_hi, starts))
     rows = [r for r in rows if any(c.strip() for c in r)]
     if len(rows) < 2 or len(rows[0]) < 2:
         return []
@@ -695,11 +703,12 @@ def _trav_progress_section(words, page_no, y_lo, y_hi) -> list[dict]:
     return [{"page": page_no, "title": "Career progress", "rows": rows}]
 
 
-def _trav_mustering_section(words, page_no, y_lo, y_hi) -> list[dict]:
+def _trav_mustering_section(words, page_no, y_lo, y_hi, geom=_MONGOOSE_CAREER_GEOMETRY) -> list[dict]:
     """Reconstruct "Mustering out benefits": 1D | CASH | BENEFITS."""
-    band = [w for w in words if 310 <= w[WORD_X0] < 565 and y_lo <= w[WORD_Y0] < y_hi]
+    x_lo, x_hi = geom.right_band
+    band = [w for w in words if x_lo <= w[WORD_X0] < x_hi and y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
-    rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
+    rows = _trav_drop_empty_cols(_trav_band_rows(words, x_lo, x_hi, y_lo, y_hi, starts))
     rows = [r for r in rows if any(c.strip() for c in r)]
     rows = _trav_merge_headerless_cols(rows)  # fold a wrapped-benefit spill column
     if len(rows) < 3 or len(rows[0]) < 2:
@@ -712,22 +721,24 @@ def _trav_mustering_section(words, page_no, y_lo, y_hi) -> list[dict]:
 _TRAV_ROLL_NOISE = frozenset({"MISHAP", "EVENT", "MISHAPS", "EVENTS"})
 
 
-def _trav_roll_text_section(words, page_no, title, header, y_lo, y_hi, page_h=792.0) -> list[dict]:
+def _trav_roll_text_section(words, page_no, title, header, y_lo, y_hi, page_h=792.0,
+                            geom=_MONGOOSE_CAREER_GEOMETRY) -> list[dict]:
     """Reconstruct a roll | description table (Mishaps / Events), where each
     description wraps over several text lines. Rows are keyed by the roll-index word
     in the left column; the description gathers every body word down to the next
     roll index. The roll column's x varies a little per career (~79–86), so we
     locate it from the leftmost numeric words rather than hardcoding it."""
     foot = page_h - 24  # drop the page-number folio in the bottom margin
+    x_lo, x_hi = geom.roll_band
 
     def keep(w) -> bool:
         return (
-            70 <= w[WORD_X0] < 580 and y_lo <= w[WORD_Y0] < min(y_hi, foot)
+            x_lo <= w[WORD_X0] < x_hi and y_lo <= w[WORD_Y0] < min(y_hi, foot)
             and w[WORD_TEXT].strip() and w[WORD_TEXT].strip().upper() not in _TRAV_ROLL_NOISE
         )
 
     sel = [w for w in words if keep(w)]
-    nums = [w for w in sel if w[WORD_X0] < 110 and _TRAV_NUM.fullmatch(w[WORD_TEXT].strip())]
+    nums = [w for w in sel if w[WORD_X0] < geom.roll_index_max and _TRAV_NUM.fullmatch(w[WORD_TEXT].strip())]
     if not nums:
         return []
     roll_x = min(w[WORD_X0] for w in nums)         # the roll column's left edge
@@ -785,7 +796,7 @@ def _trav_career_name(page) -> str:
     return ""
 
 
-def traveller_career_sections(page, page_no: int) -> list[dict]:
+def traveller_career_sections(page, page_no: int, geom=None) -> list[dict]:
     """Geometrically reconstruct every career sub-table on one Traveller career-spread
     page, returning clean ``{"page", "title", "rows"}`` dicts with proper headers.
 
@@ -802,6 +813,7 @@ def traveller_career_sections(page, page_no: int) -> list[dict]:
     Returns ``[]`` for a non-career page, so callers can guard cheaply."""
     if not is_traveller_career_page(page):
         return []
+    geom = geom or _MONGOOSE_CAREER_GEOMETRY
     words = _trav_words(page)  # heading-sized words removed (career name, margins)
     if not words:
         return []
@@ -820,10 +832,10 @@ def traveller_career_sections(page, page_no: int) -> list[dict]:
     # --- left-page sections (Skills, Ranks): full width, below the right column.
     # A section's band ends at the next left-page heading of ANY kind (Skills,
     # Ranks, Mishaps, Events) so it can't swallow the following section's content.
-    skills_y = heading_y("skills and training", x_hi=300)
-    ranks_y = heading_y("ranks and bonuses", x_hi=400)
-    mish_y = heading_y("mishaps", x_hi=300)
-    ev_y = heading_y("events", x_hi=300)
+    skills_y = heading_y("skills and training", x_hi=geom.column_split)
+    ranks_y = heading_y("ranks and bonuses", x_hi=geom.ranks_heading_max)
+    mish_y = heading_y("mishaps", x_hi=geom.column_split)
+    ev_y = heading_y("events", x_hi=geom.column_split)
     left_heads = sorted(y for y in (skills_y, ranks_y, mish_y, ev_y) if y is not None)
 
     def left_end(start):
@@ -832,33 +844,33 @@ def traveller_career_sections(page, page_no: int) -> list[dict]:
     if skills_y is not None:
         # The (uppercase) Table-A header sits a little ABOVE the vertical heading's
         # top, so start the band above it; end at the next left-page heading.
-        out += _trav_skills_sections(words, page_no, skills_y - 22, left_end(skills_y))
+        out += _trav_skills_sections(words, page_no, skills_y - 22, left_end(skills_y), geom)
     if ranks_y is not None:
-        out += _trav_ranks_section(words, page_no, ranks_y - 22, left_end(ranks_y))
+        out += _trav_ranks_section(words, page_no, ranks_y - 22, left_end(ranks_y), geom)
 
     # --- right-column sections (Career progress, Mustering): top-right quadrant,
     # ABOVE where the left-page tables begin. We cap their bottom just before the
     # next right-column heading (or the Skills header, which floats up to ~22pt
     # above the Skills heading line) so the Skills header can't leak in.
-    prog_y = heading_y("career progress", x_lo=300)
-    must_y = heading_y("mustering out", x_lo=300)
+    prog_y = heading_y("career progress", x_lo=geom.column_split)
+    must_y = heading_y("mustering out", x_lo=geom.column_split)
     skills_top = (skills_y - 24) if skills_y is not None else 330
 
     if prog_y is not None:
         end = (must_y - 2) if (must_y is not None and must_y > prog_y) else skills_top
-        out += _trav_progress_section(words, page_no, prog_y + 8, end)
+        out += _trav_progress_section(words, page_no, prog_y + 8, end, geom)
     if must_y is not None:
-        out += _trav_mustering_section(words, page_no, must_y + 8, skills_top)
+        out += _trav_mustering_section(words, page_no, must_y + 8, skills_top, geom)
 
     # --- facing page: Mishaps (1D) + Events (2D), each a roll | description table.
     if mish_y is not None:
         end = ev_y - 2 if ev_y is not None and ev_y > mish_y else page_bottom
         out += _trav_roll_text_section(
-            words, page_no, "Mishaps", ["1D", "Mishap"], mish_y, end, page_bottom
+            words, page_no, "Mishaps", ["1D", "Mishap"], mish_y, end, page_bottom, geom
         )
     if ev_y is not None:
         out += _trav_roll_text_section(
-            words, page_no, "Events", ["2D", "Event"], ev_y, page_bottom, page_bottom
+            words, page_no, "Events", ["2D", "Event"], ev_y, page_bottom, page_bottom, geom
         )
     return out
 
@@ -914,9 +926,11 @@ sources.register(
         # Contents-derived single-domain chapters route header-less tables.
         item_chapters=frozenset({"EQUIPMENT"}),
         transport_chapters=frozenset({"VEHICLES", "COMMON SPACECRAFT"}),
-        # Career-spread swap: detect a career page, then reconstruct its sub-tables.
+        # Career-spread swap: detect a career page, then reconstruct its sub-tables
+        # using the Mongoose 2e page-layout coordinates.
         career_detect=is_traveller_career_page,
         career_sections=traveller_career_sections,
+        career_geometry=_MONGOOSE_CAREER_GEOMETRY,
     )
 )
 
