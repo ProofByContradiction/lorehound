@@ -109,5 +109,62 @@ class TestRender(unittest.TestCase):
         self.assertEqual(draft_summary(CharacterDraft(game="Test")), "")  # nothing yet
 
 
+class TestT2KData(unittest.TestCase):
+    """The T2K data accessor flattens a detected career card into a typed T2KCareer
+    and snapshots the set for a session."""
+
+    def _career(self, name, sections):
+        from lorehound.careers import Career, CareerSection
+        return Career(
+            game="Twilight: 2000", name=name, source="Core.pdf", locator="p. 34",
+            sections=[CareerSection(**s) for s in sections],
+        )
+
+    def test_flatten_military_career(self):
+        from lorehound.chargen.data import t2k_career_from
+        c = self._career("Combat Arms", [
+            {"label": "Requirements", "text": "STR or AGL B+"},
+            {"label": "Starting Rank", "text": "Private"},
+            {"label": "Skills", "text": "Close Combat, Heavy Weapons, Ranged Combat"},
+            {"label": "Specialty (D6)", "rows": [["Roll (D6)", "Specialty"],
+                                                 ["1", "Rifleman"], ["2", "Tanker"]]},
+            {"label": "Starting Gear", "text": "✓ Assault rifle ✓ D6 reloads ✓ Knife"},
+        ])
+        tc = t2k_career_from(c)
+        self.assertTrue(tc.is_military)
+        self.assertEqual(tc.rank, "Private")
+        self.assertEqual(tc.skills, ["Close Combat", "Heavy Weapons", "Ranged Combat"])
+        self.assertEqual(tc.specialties, [("1", "Rifleman"), ("2", "Tanker")])
+        self.assertEqual(tc.gear, ["Assault rifle", "D6 reloads", "Knife"])
+        self.assertEqual(tc.requirements, "STR or AGL B+")
+
+    def test_civilian_has_no_rank(self):
+        from lorehound.chargen.data import t2k_career_from
+        c = self._career("Doctor", [
+            {"label": "Skills", "text": "Medical Aid, Persuasion"},
+            {"label": "Specialty (D6)", "rows": [["Roll (D6)", "Specialty"], ["1", "Combat Medic"]]},
+        ])
+        tc = t2k_career_from(c)
+        self.assertFalse(tc.is_military)
+        self.assertEqual(tc.rank, "")
+
+    def test_build_snapshot_filters_and_orders(self):
+        from lorehound.chargen.data import build_t2k_data
+        empty = self._career("Empty", [{"label": "Flavour", "text": "no usable data"}])
+        civ = self._career("Doctor", [{"label": "Skills", "text": "Medical Aid"}])
+        mil = self._career("Combat Arms", [
+            {"label": "Starting Rank", "text": "Private"},
+            {"label": "Skills", "text": "Ranged Combat"},
+        ])
+
+        class _Rules:
+            careers = {"Twilight: 2000": {"empty": empty, "doctor": civ, "combat arms": mil}}
+
+        data = build_t2k_data(_Rules(), "Twilight: 2000")
+        names = [c.name for c in data.careers]
+        self.assertEqual(names, ["Combat Arms", "Doctor"])   # military first; Empty dropped
+        self.assertIsNotNone(data.career("doctor"))
+
+
 if __name__ == "__main__":
     unittest.main()
