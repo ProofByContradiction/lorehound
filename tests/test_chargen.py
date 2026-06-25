@@ -234,6 +234,33 @@ class TestT2KFlow(unittest.TestCase):
         self.assertTrue(s.complete)                # graceful, no crash
         self.assertIn("Note", s.draft.notes)
 
+    def test_attributes_use_2d3_increases_from_c_baseline(self):
+        from lorehound.chargen.engine import QUICK, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+
+        rng = random.Random(5)
+        # Force the 2D3 attribute-increase roll to 4 (the only ROLL in the flow).
+        s = ChargenSession(
+            t2k_flow, mode=QUICK, draft=CharacterDraft(game="Twilight: 2000"),
+            data=self._data(),
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=4),
+            rng=rng,
+        )
+        for _ in range(500):
+            if s.current is None:
+                break
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+
+        ladder = ["D", "C", "B", "A"]
+        # Every attribute started at C and only moved up; the total steps above C
+        # must equal the rolled 2D3 result.
+        steps_up = sum(ladder.index(v) - ladder.index("C") for v in s.draft.attributes.values())
+        self.assertEqual(steps_up, 4)
+        self.assertTrue(all(ladder.index(v) >= ladder.index("C") for v in s.draft.attributes.values()))
+        self.assertEqual(s.draft.derived["Coolness Under Fire"], "D")
+
 
 class TestRegistration(unittest.TestCase):
     def test_t2k_system_registered(self):

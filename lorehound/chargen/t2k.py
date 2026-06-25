@@ -29,18 +29,21 @@ ATTRIBUTES = ("STR", "AGL", "INT", "EMP")
 _ATTR_LADDER = ["D", "C", "B", "A"]    # ascending; A is best
 _SKILL_LADDER = ["F", "D", "C", "B", "A"]  # F = untrained
 
-# --- Allocation amounts (APPROXIMATE — see module docstring) ---------------
-BASELINE_ATTR = "C"          # "average Jane or Joe" per the core book
-BASE_ATTR_INCREASES = 2      # one-step raises from the C baseline
-DROP_BONUS_INCREASES = 2     # extra raises gained by dropping one attribute to D
+# --- Allocation amounts ----------------------------------------------------
+# Attributes follow the core book's rules-as-written (confirmed against the worked
+# example: a 2D3 roll of 4 yields STR B, AGL A, INT B, EMP C from a C baseline):
+BASELINE_ATTR = "C"          # every attribute starts at C ("average")
+ATTR_INCREASE_DICE = "2d3"   # number of one-step attribute increases to distribute
+CUF_START = "D"              # Coolness Under Fire starts at D
+# Per-term skill handling is still simplified (see _FIDELITY_NOTE):
 SKILLS_PER_TERM = 2          # one-step skill raises granted each term
 MAX_TERMS = 4                # career terms before the mandatory "At War" term
 RANGED_COMBAT = "Ranged Combat"  # first term must train this (T2K life-path rule)
 
-_APPROX_NOTE = (
-    "Attribute/skill allocation uses a standard spread (C baseline, "
-    f"{BASE_ATTR_INCREASES} increases; drop one to D for +{DROP_BONUS_INCREASES}). "
-    "Confirm against your table for strict rules-as-written."
+_FIDELITY_NOTE = (
+    "Attributes use the rules-as-written (C baseline, 2D3 increases, CUF D). "
+    "Childhood, the specialty skill-roll, and aging aren't modelled yet, and "
+    "per-term skill gains are simplified — confirm those against your table."
 )
 
 
@@ -77,24 +80,21 @@ def t2k_flow(ctx):  # -> Flow (generator)
 
     draft.notes["Reminder"] = "Define a moral code and a 'buddy' (a key relationship) with your group."
     draft.notes.setdefault("Permanent rads", "0")
-    draft.notes["Note"] = _APPROX_NOTE
+    draft.notes["Note"] = _FIDELITY_NOTE
 
 
 def _attributes(ctx, data: T2KData, draft):
     for a in ATTRIBUTES:
-        draft.attributes[a] = BASELINE_ATTR
-    drop = yield Step(
-        "attr_drop", StepKind.CHOICE,
-        "Attributes start at C. Drop one to D for extra increases?",
-        options=[Option("none", "Keep all at C")]
-        + [Option(a, f"Drop {a} to D") for a in ATTRIBUTES],
-        detail="Ratings run A (best) · B · C · D (worst).",
+        draft.attributes[a] = BASELINE_ATTR  # every attribute starts at C
+    draft.derived["Coolness Under Fire"] = CUF_START
+    roll = yield Step(
+        "attr_increases", StepKind.ROLL,
+        "Roll 2D3 for attribute increases",
+        roll_spec=ATTR_INCREASE_DICE,
+        detail="Attributes start at C (A best · D worst); each increase raises one one step.",
     )
-    increases = BASE_ATTR_INCREASES
-    if drop.value in ATTRIBUTES:
-        draft.attributes[drop.value] = "D"
-        increases += DROP_BONUS_INCREASES
-        ctx.log(f"Dropped {drop.value} to D for +{DROP_BONUS_INCREASES} attribute increases.")
+    increases = roll.total or 0
+    ctx.log(f"Rolled {increases} attribute increases on 2D3.")
     for n in range(increases):
         options = [
             Option(a, f"Raise {a}: {draft.attributes[a]} → {_step_up(draft.attributes[a], _ATTR_LADDER)}")
