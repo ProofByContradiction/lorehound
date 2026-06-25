@@ -15,6 +15,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
+# A PyMuPDF "word" is the tuple (x0, y0, x1, y1, text, block, line, word); name
+# the fields we index so the geometry reads clearly instead of as bare numbers.
+WORD_X0, WORD_Y0, WORD_X1, WORD_Y1, WORD_TEXT = 0, 1, 2, 3, 4
+
 
 def _cluster(values: set[float], tol: float) -> list[float]:
     """Collapse near-duplicate edge coordinates that are within ``tol``."""
@@ -214,12 +218,12 @@ def _career_grids(page, page_no: int) -> list[dict]:
     segment by ``CAREER`` header: each header starts a table that runs down
     through its first-column field labels until the next header. Returns one grid
     per reconstructed table (possibly empty)."""
-    words = [w for w in page.get_text("words") if w[4].strip()]
+    words = [w for w in page.get_text("words") if w[WORD_TEXT].strip()]
     if not words:
         return []
 
     def label_of(w) -> str | None:
-        t = w[4].strip().lower().strip(":")
+        t = w[WORD_TEXT].strip().lower().strip(":")
         if t == _CAREER_HDR:
             return "career"
         return t if t in _CAREER_FIELDS else None
@@ -227,9 +231,9 @@ def _career_grids(page, page_no: int) -> list[dict]:
     tagged = [(w, label_of(w)) for w in words if label_of(w)]
     if not tagged:
         return []
-    label_x = min(w[0] for w, _ in tagged)
-    labels = [(w, l) for w, l in tagged if abs(w[0] - label_x) <= 12]
-    header_ys = sorted(w[1] for w, l in labels if l == "career")
+    label_x = min(w[WORD_X0] for w, _ in tagged)
+    labels = [(w, l) for w, l in tagged if abs(w[WORD_X0] - label_x) <= 12]
+    header_ys = sorted(w[WORD_Y0] for w, l in labels if l == "career")
     if not header_ys:
         return []
 
@@ -238,30 +242,30 @@ def _career_grids(page, page_no: int) -> list[dict]:
         seg_end = header_ys[hi + 1] if hi + 1 < len(header_ys) else page.rect.height
         # Field-label anchors within this header's segment.
         anchors: list[float] = []
-        for y in sorted(round(w[1]) for w, _ in labels if career_y - 1 <= w[1] < seg_end):
+        for y in sorted(round(w[WORD_Y0]) for w, _ in labels if career_y - 1 <= w[WORD_Y0] < seg_end):
             if not anchors or y - anchors[-1] > 6:
                 anchors.append(y)
-        if len({l for w, l in labels if career_y - 1 <= w[1] < seg_end} - {"career"}) < 2:
+        if len({l for w, l in labels if career_y - 1 <= w[WORD_Y0] < seg_end} - {"career"}) < 2:
             continue  # not enough field rows to be a career table
         # Specialty roll rows (1..9 in the label column, below the SPECIALTY label).
-        spec_ys = [w[1] for w, l in labels if l.startswith("special") and career_y <= w[1] < seg_end]
+        spec_ys = [w[WORD_Y0] for w, l in labels if l.startswith("special") and career_y <= w[WORD_Y0] < seg_end]
         if spec_ys:
             spec_y = min(spec_ys)
             for w in words:
-                t = w[4].strip()
+                t = w[WORD_TEXT].strip()
                 if (
                     t.isdigit() and 1 <= int(t) <= 9
-                    and abs(w[0] - label_x) <= 12
-                    and spec_y + 2 < w[1] < seg_end
+                    and abs(w[WORD_X0] - label_x) <= 12
+                    and spec_y + 2 < w[WORD_Y0] < seg_end
                 ):
-                    y = round(w[1])
+                    y = round(w[WORD_Y0])
                     if all(abs(y - a) > 6 for a in anchors):
                         anchors.append(y)
             anchors.sort()
 
         nxt = min((a for a in anchors if a > career_y + 3), default=career_y + 20)
-        hdr_words = [w for w in words if career_y - 2 <= w[1] < nxt - 2 and w[0] >= label_x - 4]
-        cols = _col_starts(sorted(w[0] for w in hdr_words))
+        hdr_words = [w for w in words if career_y - 2 <= w[WORD_Y0] < nxt - 2 and w[WORD_X0] >= label_x - 4]
+        cols = _col_starts(sorted(w[WORD_X0] for w in hdr_words))
         if len(cols) < 3:
             continue  # need a label column + at least two careers
 
@@ -277,10 +281,10 @@ def _career_grids(page, page_no: int) -> list[dict]:
             bottom = anchors[i + 1] if i + 1 < len(anchors) else min(top + 19, seg_end)
             buckets: list[list] = [[] for _ in cols]
             for w in words:
-                if top - 3 <= w[1] < bottom - 3 and w[0] >= label_x - 6:
-                    buckets[col_of(w[0])].append(w)
+                if top - 3 <= w[WORD_Y0] < bottom - 3 and w[WORD_X0] >= label_x - 6:
+                    buckets[col_of(w[WORD_X0])].append(w)
             row = [
-                " ".join(x[4] for x in sorted(b, key=lambda w: (round(w[1] / 3), w[0])))
+                " ".join(x[WORD_TEXT] for x in sorted(b, key=lambda w: (round(w[WORD_Y0] / 3), w[WORD_X0])))
                 for b in buckets
             ]
             if any(row):
@@ -346,12 +350,12 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
             nc, nr = len(xe) - 1, len(ye) - 1
             grid = [["" for _ in range(nc)] for _ in range(nr)]
             for w in words:
-                cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+                cx, cy = (w[WORD_X0] + w[WORD_X1]) / 2, (w[WORD_Y0] + w[WORD_Y1]) / 2
                 if not (xe[0] - 2 <= cx <= xe[-1] + 2 and ye[0] - 2 <= cy <= ye[-1] + 2):
                     continue
                 ci, ri = _interval(cx, xe), _interval(cy, ye)
                 if 0 <= ci < nc and 0 <= ri < nr:
-                    grid[ri][ci] = (grid[ri][ci] + " " + w[4]).strip()
+                    grid[ri][ci] = (grid[ri][ci] + " " + w[WORD_TEXT]).strip()
             # Drop empty columns, then empty rows.
             keep = [i for i in range(nc) if any(grid[r][i].strip() for r in range(nr))]
             rows = [[row[i] for i in keep] for row in grid]
@@ -407,7 +411,7 @@ def _trav_y_bands(words, tol: float = 4.0) -> list[float]:
     """Sorted row-band tops: y-coordinates collapsed so words on the same text
     line share a band (a new band starts when y jumps more than ``tol``)."""
     bands: list[float] = []
-    for y in sorted(round(w[1]) for w in words):
+    for y in sorted(round(w[WORD_Y0]) for w in words):
         if not bands or y - bands[-1] > tol:
             bands.append(y)
     return bands
@@ -430,25 +434,25 @@ def _trav_col_anchors(words, gap: float = 30.0, numeric_only: bool = True) -> li
     roll_xs: list[float] = []
     for bi, top in enumerate(bands):
         bottom = bands[bi + 1] if bi + 1 < len(bands) else top + 100
-        row = sorted((w for w in words if top - 4 < w[1] < bottom - 4), key=lambda w: w[0])
+        row = sorted((w for w in words if top - 4 < w[WORD_Y0] < bottom - 4), key=lambda w: w[WORD_X0])
         if not row:
             continue
         if numeric_only:
-            if not _TRAV_NUM.fullmatch(row[0][4].strip()):
+            if not _TRAV_NUM.fullmatch(row[0][WORD_TEXT].strip()):
                 continue
             # The roll index is its own (short, far-left) column even when the next
             # column sits closer than ``gap`` (Navy's PD column starts ~20pt right
             # of the roll). Seed col0 at the roll's x; cluster the rest beyond it.
-            roll_xs.append(row[0][0])
-            data = [w for w in row[1:] if w[0] > row[0][0] + 14]
+            roll_xs.append(row[0][WORD_X0])
+            data = [w for w in row[1:] if w[WORD_X0] > row[0][WORD_X0] + 14]
         else:
             data = row
         prev = None
         rs: list[float] = []
         for w in data:
-            if prev is None or w[0] - prev > gap:
-                rs.append(w[0])
-            prev = w[0]
+            if prev is None or w[WORD_X0] - prev > gap:
+                rs.append(w[WORD_X0])
+            prev = w[WORD_X0]
         starts_per_row.append(rs)
     flat = sorted(x for rs in starts_per_row for x in rs)
     clusters: list[list[float]] = []  # [rep_x, count]
@@ -467,7 +471,7 @@ def _trav_col_anchors(words, gap: float = 30.0, numeric_only: bool = True) -> li
 def _trav_band_rows(words, x_lo, x_hi, y_lo, y_hi, starts, tol: float = 4.0) -> list[list[str]]:
     """Bucket the words in a rectangle into a cell grid using fixed column
     ``starts`` (each word joins the rightmost start at/left of it) and y row-bands."""
-    sel = [w for w in words if x_lo <= w[0] < x_hi and y_lo <= w[1] < y_hi and w[4].strip()]
+    sel = [w for w in words if x_lo <= w[WORD_X0] < x_hi and y_lo <= w[WORD_Y0] < y_hi and w[WORD_TEXT].strip()]
     if not sel or not starts:
         return []
 
@@ -484,9 +488,9 @@ def _trav_band_rows(words, x_lo, x_hi, y_lo, y_hi, starts, tol: float = 4.0) -> 
         bottom = bands[bi + 1] if bi + 1 < len(bands) else top + 100
         cells: list[list] = [[] for _ in starts]
         for w in sel:
-            if top - tol < w[1] < bottom - tol:
-                cells[col_of(w[0])].append(w)
-        rows.append([" ".join(x[4] for x in sorted(b, key=lambda w: w[0])) for b in cells])
+            if top - tol < w[WORD_Y0] < bottom - tol:
+                cells[col_of(w[WORD_X0])].append(w)
+        rows.append([" ".join(x[WORD_TEXT] for x in sorted(b, key=lambda w: w[WORD_X0])) for b in cells])
     return rows
 
 
@@ -594,11 +598,11 @@ def _trav_words(page) -> list:
     rects = _trav_heading_rects(page)
 
     def in_heading(w) -> bool:
-        cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+        cx, cy = (w[WORD_X0] + w[WORD_X1]) / 2, (w[WORD_Y0] + w[WORD_Y1]) / 2
         return any(x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1
                    for x0, y0, x1, y1 in rects)
 
-    return [w for w in _page_words(page) if w[4].strip() and not in_heading(w)]
+    return [w for w in _page_words(page) if w[WORD_TEXT].strip() and not in_heading(w)]
 
 
 def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
@@ -606,7 +610,7 @@ def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
     Roll | Personal Development | Service Skills | Advanced Education grid) and, if
     present, Table B (the per-assignment specialist-skills grid). The two stack in
     one band; a second ``1D``-led uppercase row marks B's header, splitting them."""
-    band = [w for w in words if y_lo <= w[1] < y_hi]
+    band = [w for w in words if y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
     rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
     # Header rows: first cell "1D" with >=2 uppercase cells after it. The 1st is
@@ -643,7 +647,7 @@ def _trav_ranks_section(words, page_no, y_lo, y_hi) -> list[dict]:
     A career can stack two rank tracks (e.g. Agent's enlisted vs intelligence), each
     with its own ``RANK``-led header; we keep them as one table (the inline second
     header reads fine as a sub-divider)."""
-    band = [w for w in words if y_lo <= w[1] < y_hi]
+    band = [w for w in words if y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
     rows = _trav_band_rows(words, 82, 560, y_lo, y_hi, starts)
     rows = [r for r in rows if any(c.strip() for c in r)]
@@ -680,7 +684,7 @@ def _trav_ranks_section(words, page_no, y_lo, y_hi) -> list[dict]:
 def _trav_progress_section(words, page_no, y_lo, y_hi) -> list[dict]:
     """Reconstruct the "Career progress" survival/advancement table: a blank-headed
     assignment column then SURVIVAL and ADVANCEMENT (their checks per assignment)."""
-    band = [w for w in words if 310 <= w[0] < 565 and y_lo <= w[1] < y_hi]
+    band = [w for w in words if 310 <= w[WORD_X0] < 565 and y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=False)
     rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
     rows = [r for r in rows if any(c.strip() for c in r)]
@@ -693,7 +697,7 @@ def _trav_progress_section(words, page_no, y_lo, y_hi) -> list[dict]:
 
 def _trav_mustering_section(words, page_no, y_lo, y_hi) -> list[dict]:
     """Reconstruct "Mustering out benefits": 1D | CASH | BENEFITS."""
-    band = [w for w in words if 310 <= w[0] < 565 and y_lo <= w[1] < y_hi]
+    band = [w for w in words if 310 <= w[WORD_X0] < 565 and y_lo <= w[WORD_Y0] < y_hi]
     starts = _trav_col_anchors(band, gap=30.0, numeric_only=True)
     rows = _trav_drop_empty_cols(_trav_band_rows(words, 310, 565, y_lo, y_hi, starts))
     rows = [r for r in rows if any(c.strip() for c in r)]
@@ -718,27 +722,27 @@ def _trav_roll_text_section(words, page_no, title, header, y_lo, y_hi, page_h=79
 
     def keep(w) -> bool:
         return (
-            70 <= w[0] < 580 and y_lo <= w[1] < min(y_hi, foot)
-            and w[4].strip() and w[4].strip().upper() not in _TRAV_ROLL_NOISE
+            70 <= w[WORD_X0] < 580 and y_lo <= w[WORD_Y0] < min(y_hi, foot)
+            and w[WORD_TEXT].strip() and w[WORD_TEXT].strip().upper() not in _TRAV_ROLL_NOISE
         )
 
     sel = [w for w in words if keep(w)]
-    nums = [w for w in sel if w[0] < 110 and _TRAV_NUM.fullmatch(w[4].strip())]
+    nums = [w for w in sel if w[WORD_X0] < 110 and _TRAV_NUM.fullmatch(w[WORD_TEXT].strip())]
     if not nums:
         return []
-    roll_x = min(w[0] for w in nums)               # the roll column's left edge
-    rolls = [w for w in nums if w[0] <= roll_x + 12]
+    roll_x = min(w[WORD_X0] for w in nums)         # the roll column's left edge
+    rolls = [w for w in nums if w[WORD_X0] <= roll_x + 12]
     body_x = roll_x + 22                            # descriptions sit ~25pt right
-    rolls.sort(key=lambda w: w[1])
+    rolls.sort(key=lambda w: w[WORD_Y0])
     rows = [list(header)]
     for i, rw in enumerate(rolls):
-        top = rw[1] - 2
-        bottom = rolls[i + 1][1] - 2 if i + 1 < len(rolls) else min(y_hi, foot)
-        body = [w for w in sel if w[0] >= body_x and top <= w[1] < bottom]
-        body.sort(key=lambda w: (round(w[1] / 3), w[0]))
-        text = " ".join(w[4] for w in body).strip()
+        top = rw[WORD_Y0] - 2
+        bottom = rolls[i + 1][WORD_Y0] - 2 if i + 1 < len(rolls) else min(y_hi, foot)
+        body = [w for w in sel if w[WORD_X0] >= body_x and top <= w[WORD_Y0] < bottom]
+        body.sort(key=lambda w: (round(w[WORD_Y0] / 3), w[WORD_X0]))
+        text = " ".join(w[WORD_TEXT] for w in body).strip()
         if text:
-            rows.append([rw[4].strip(), text])
+            rows.append([rw[WORD_TEXT].strip(), text])
     if len(rows) < 3:
         return []
     return [{"page": page_no, "title": title, "rows": rows}]

@@ -252,9 +252,9 @@ class TestAssemble(unittest.TestCase):
         self.assertIsNone(assemble_career(self._search_over(chunks), "Trav", "Agent"))
 
 
-def _w(x0, y, text, *, w=10.0):
+def _word(x0, y, text, *, width=10.0):
     """A minimal PyMuPDF word tuple (x0, y0, x1, y1, text, block, line, word)."""
-    return (x0, y, x0 + w, y + 9.0, text, 0, 0, 0)
+    return (x0, y, x0 + width, y + 9.0, text, 0, 0, 0)
 
 
 class TestTravellerColumnAnchors(unittest.TestCase):
@@ -268,8 +268,8 @@ class TestTravellerColumnAnchors(unittest.TestCase):
 
         words = []
         for i, y in enumerate((10, 22, 34)):
-            words += [_w(85, y, str(i + 1)), _w(106, y, "STR"), _w(225, y, "Pilot"),
-                      _w(315, y, "Medic")]
+            words += [_word(85, y, str(i + 1)), _word(106, y, "STR"), _word(225, y, "Pilot"),
+                      _word(315, y, "Medic")]
         cols = _trav_col_anchors(words, gap=30.0, numeric_only=True)
         self.assertEqual(len(cols), 4)  # roll + 3 data columns, none merged
 
@@ -279,9 +279,9 @@ class TestTravellerColumnAnchors(unittest.TestCase):
 
         words = []
         for i, y in enumerate((10, 22, 34, 46)):
-            words += [_w(85, y, str(i + 1)), _w(126, y, "Recon"), _w(270, y, "Stealth"),
-                      _w(400, y, "Carouse")]
-        words += [_w(452, 22, "(computers)")]  # one stray continuation in row 2
+            words += [_word(85, y, str(i + 1)), _word(126, y, "Recon"), _word(270, y, "Stealth"),
+                      _word(400, y, "Carouse")]
+        words += [_word(452, 22, "(computers)")]  # one stray continuation in row 2
         cols = _trav_col_anchors(words, gap=30.0, numeric_only=True)
         self.assertEqual(len(cols), 4)
 
@@ -293,18 +293,18 @@ class TestTravellerSkillsSplit(unittest.TestCase):
     def _skills_words(self):
         words = []
         # Table A header (present in PDF text as an uppercase 1D-led row).
-        words += [_w(85, 0, "1D"), _w(126, 0, "PERSONAL"), _w(160, 0, "DEVELOPMENT"),
-                  _w(270, 0, "SERVICE"), _w(300, 0, "SKILLS"),
-                  _w(400, 0, "ADVANCED"), _w(440, 0, "EDUCATION")]
+        words += [_word(85, 0, "1D"), _word(126, 0, "PERSONAL"), _word(160, 0, "DEVELOPMENT"),
+                  _word(270, 0, "SERVICE"), _word(300, 0, "SKILLS"),
+                  _word(400, 0, "ADVANCED"), _word(440, 0, "EDUCATION")]
         for i, y in enumerate((12, 24, 36, 48, 60, 72), start=1):
-            words += [_w(85, y, str(i)), _w(126, y, "Gun"), _w(270, y, "Drive"),
-                      _w(400, y, "Medic")]
+            words += [_word(85, y, str(i)), _word(126, y, "Gun"), _word(270, y, "Drive"),
+                      _word(400, y, "Medic")]
         # Table B header (specialist assignments — uppercase, kept verbatim).
-        words += [_w(85, 90, "1D"), _w(126, 90, "LAW"), _w(160, 90, "ENFORCEMENT"),
-                  _w(270, 90, "INTELLIGENCE"), _w(400, 90, "CORPORATE")]
+        words += [_word(85, 90, "1D"), _word(126, 90, "LAW"), _word(160, 90, "ENFORCEMENT"),
+                  _word(270, 90, "INTELLIGENCE"), _word(400, 90, "CORPORATE")]
         for i, y in enumerate((102, 114, 126), start=1):
-            words += [_w(85, y, str(i)), _w(126, y, "Recon"), _w(270, y, "Stealth"),
-                      _w(400, y, "Carouse")]
+            words += [_word(85, y, str(i)), _word(126, y, "Recon"), _word(270, y, "Stealth"),
+                      _word(400, y, "Carouse")]
         return words
 
     def test_table_a_gets_fixed_header_and_b_is_split_off(self):
@@ -413,10 +413,10 @@ class TestTravSectionReconstructors(unittest.TestCase):
     def test_ranks_dedups_repeated_header(self):
         from lorehound.pdf_tables import _trav_ranks_section
 
-        words = [_w(85, 0, "RANK"), _w(300, 0, "SKILL"),
-                 _w(85, 14, "RANK"), _w(300, 14, "SKILL")]  # uppercase shadow duplicate
+        words = [_word(85, 0, "RANK"), _word(300, 0, "SKILL"),
+                 _word(85, 14, "RANK"), _word(300, 14, "SKILL")]  # uppercase shadow duplicate
         for i, y in enumerate((28, 42, 56)):
-            words += [_w(85, y, str(i)), _w(300, y, "Admin")]
+            words += [_word(85, y, str(i)), _word(300, y, "Admin")]
         secs = _trav_ranks_section(words, 5, -10, 100)
         self.assertEqual(len(secs), 1)
         self.assertEqual(secs[0]["title"], "Ranks and bonuses")
@@ -426,9 +426,9 @@ class TestTravSectionReconstructors(unittest.TestCase):
     def test_mustering_reconstructs_cash_benefits(self):
         from lorehound.pdf_tables import _trav_mustering_section
 
-        words = [_w(315, 0, "1D"), _w(385, 0, "CASH"), _w(455, 0, "BENEFITS")]
+        words = [_word(315, 0, "1D"), _word(385, 0, "CASH"), _word(455, 0, "BENEFITS")]
         for i, y in enumerate((14, 28, 42), start=1):
-            words += [_w(315, y, str(i)), _w(385, y, "Cr1000"), _w(455, y, "Weapon")]
+            words += [_word(315, y, str(i)), _word(385, y, "Cr1000"), _word(455, y, "Weapon")]
         secs = _trav_mustering_section(words, 5, -10, 100)
         self.assertEqual(len(secs), 1)
         self.assertEqual(secs[0]["title"], "Mustering out benefits")
