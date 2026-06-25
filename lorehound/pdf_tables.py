@@ -100,12 +100,17 @@ def toc_from_contents_page(doc) -> list[tuple[int, str, int]]:
     return [(1, title, printed + offset + 1) for title, printed in pairs]
 
 
-def classify_table(chapter: str, rows: list[list[str]]) -> str:
+def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     """Route a structured table to a lookup category from its header + chapter.
 
     Returns one of: 'rules' (genuine lookup table → /table), 'items' (weapon/gear
     stat blocks → /item), 'transport' (vehicle stat blocks → /transport), 'card'
     (career/archetype cards → /class), or 'noise' (junk fragment → drop).
+
+    ``profile`` (a :class:`sources.SourceProfile`) supplies the per-system
+    chapter-fallback routing — its ``item_chapters`` / ``transport_chapters`` — so
+    routing knowledge lives on the source registry, not in this generic function.
+    With no profile, a header-less table falls through to 'rules'.
     """
     hdr = " ".join(rows[0]).upper()
     chap = (chapter or "").upper()
@@ -161,11 +166,13 @@ def classify_table(chapter: str, rows: list[list[str]]) -> str:
         return "card"
     # Chapter fallback: when the header gives no signal, a clean single-domain
     # chapter (e.g. Traveller's Contents-derived "EQUIPMENT" / "VEHICLES") routes
-    # the table. Exact match only, so a mixed chapter like T2K's "Weapons, Vehicles
-    # & Gear" doesn't trip it (its tables already routed by header keywords above).
-    if chap == "EQUIPMENT":
+    # the table. The chapter sets come from the source profile (not hardcoded here),
+    # and it's an exact match only — so a mixed chapter like T2K's "Weapons,
+    # Vehicles & Gear" doesn't trip it (its tables already routed by header keywords
+    # above), and an unprofiled book never force-routes on chapter alone.
+    if profile and chap in profile.item_chapters:
         return "items"
-    if chap in ("VEHICLES", "COMMON SPACECRAFT"):
+    if profile and chap in profile.transport_chapters:
         return "transport"
     return "rules"
 
@@ -871,6 +878,12 @@ sources.register(
         name="Traveller (Mongoose)",
         games=("traveller",),
         reconstructors=[_traveller_careers],
+        # Contents-derived single-domain chapters route header-less tables.
+        item_chapters=frozenset({"EQUIPMENT"}),
+        transport_chapters=frozenset({"VEHICLES", "COMMON SPACECRAFT"}),
+        # Career-spread swap: detect a career page, then reconstruct its sub-tables.
+        career_detect=is_traveller_career_page,
+        career_sections=traveller_career_sections,
     )
 )
 

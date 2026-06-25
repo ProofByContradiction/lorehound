@@ -349,9 +349,11 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     card→'card' — tag it with a "Chapter › Name" breadcrumb, and keep the cell
     grid for aligned rendering.
     """
+    from . import sources
     from .pdf_tables import classify_table
 
     game, book = _split_game_and_file(path)
+    profile = sources.profile_for(game)  # supplies chapter-fallback routing
     cat_map = {
         "rules": "tables",
         "items": "items",
@@ -369,7 +371,7 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
         flat = "\n".join(" ".join(c for c in r if c) for r in rows)
         # Re-run classification at index time (not the cached category) so routing
         # fixes apply on a rebuild without re-extracting every PDF.
-        category = classify_table(chapter, rows)
+        category = classify_table(chapter, rows, profile)
         if category == "noise":
             continue
         chunks.append(

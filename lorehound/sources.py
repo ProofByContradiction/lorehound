@@ -28,6 +28,18 @@ class SourceProfile:
     name: str
     games: tuple[str, ...]                       # game-name substrings this matches
     reconstructors: list[Reconstructor] = field(default_factory=list)
+    # Chapter-fallback routing for ``pdf_tables.classify_table``: when a table's
+    # header gives no category signal, an exact (UPPERCASE) match on the table's
+    # chapter routes it. Empty by default, so an unprofiled book never force-routes
+    # on chapter name alone. Chapter strings are compared upper-cased.
+    item_chapters: frozenset[str] = frozenset()        # e.g. {"EQUIPMENT"} -> /item
+    transport_chapters: frozenset[str] = frozenset()   # e.g. {"VEHICLES"} -> /transport
+    # Career-spread hooks (heading-anchored careers whose section sub-tables
+    # find_tables shatters). ``career_detect(page) -> bool`` says a page is part of
+    # a career spread; ``career_sections(page, page_no) -> list[dict]`` returns the
+    # clean geometric reconstruction that replaces the mangled generic tables.
+    career_detect: Callable | None = None
+    career_sections: Callable | None = None
 
     def matches(self, game: str) -> bool:
         g = (game or "").lower()

@@ -211,6 +211,31 @@ class TestClassifyAndCategory(unittest.TestCase):
                 ["M1 Abrams", "MBT", "5", "105mm", "900,000"]]
         self.assertEqual(classify_table("Weapons, Vehicles & Gear", rows), "transport")
 
+    def test_chapter_fallback_routes_via_profile(self):
+        from lorehound import sources
+        from lorehound.pdf_tables import classify_table
+
+        # Header gives no category signal; the Traveller profile's item/transport
+        # chapters route these header-less tables (case-insensitive on the chapter).
+        prof = sources.profile_for("Traveller (Mongoose)")
+        self.assertIsNotNone(prof)
+        gear = [["NAME", "TL", "MASS", "COST"], ["Comm", "8", "1", "100"]]
+        self.assertEqual(classify_table("EQUIPMENT", gear, prof), "items")
+        veh = [["NAME", "TL", "SKILL", "COST"], ["ATV", "8", "Drive", "30000"]]
+        self.assertEqual(classify_table("VEHICLES", veh, prof), "transport")
+        self.assertEqual(classify_table("COMMON SPACECRAFT", veh, prof), "transport")
+
+    def test_chapter_fallback_is_profile_driven_not_hardcoded(self):
+        from lorehound.pdf_tables import classify_table
+
+        # With no profile, the chapter name alone must NOT force-route: routing is
+        # now profile-supplied, so these header-less tables fall through to "rules".
+        gear = [["NAME", "TL", "MASS", "COST"], ["Comm", "8", "1", "100"]]
+        veh = [["NAME", "TL", "SKILL", "COST"], ["ATV", "8", "Drive", "30000"]]
+        self.assertEqual(classify_table("EQUIPMENT", gear), "rules")
+        self.assertEqual(classify_table("VEHICLES", veh), "rules")
+        self.assertEqual(classify_table("COMMON SPACECRAFT", veh), "rules")
+
 
 class TestExplodeToItems(unittest.TestCase):
     def test_catalog_explodes_to_per_item_picks(self):

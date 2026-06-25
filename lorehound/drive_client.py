@@ -320,34 +320,30 @@ class DriveClient:
                     sec = title
             return chap.split(".", 1)[-1].strip(), sec
 
-        # Mongoose Traveller career spreads: find_tables shatters the career
+        # Career spreads (e.g. Mongoose Traveller): find_tables shatters the career
         # sub-tables (drops columns, omits headers, merges the skill A/B split), so
         # the generic pass mangles them. Swap the generic tables on each career page
         # for a clean geometric reconstruction (see pdf_tables). The career *anchor*
         # cards ([[CAREER, name], [PAGE, n]]) the reconstructor emits are kept — the
         # career assembler keys off them — only the mangled section tables are
-        # replaced. T2K (no career spreads) is untouched: no page tests positive.
+        # replaced. The detect/reconstruct hooks come from the source profile, so a
+        # system without career spreads (T2K) simply has no hooks and skips this.
         from .sources import profile_for
 
-        career_pages: dict[int, list[dict]] = {}
         prof = profile_for(game)
-        if prof is not None and any("traveller" in k for k in prof.games):
-            from .pdf_tables import (
-                is_traveller_career_page,
-                traveller_career_sections,
-            )
-
+        career_pages: dict[int, list[dict]] = {}
+        if prof is not None and prof.career_detect and prof.career_sections:
             # Scan every page (not just those with generic tables): a career's facing
             # Mishaps/Events page often yields no find_tables hits, so it would be
-            # missed if we only looked at pages already in ``raw``. Gated to the
-            # Traveller profile so other books (T2K, etc.) skip the scan entirely.
+            # missed if we only looked at pages already in ``raw``. Gated to profiles
+            # that declare career hooks so other books skip the scan entirely.
             for page_no in range(1, doc.page_count + 1):
                 try:
                     page = doc.load_page(page_no - 1)
                 except Exception:  # noqa: BLE001
                     continue
-                if is_traveller_career_page(page):
-                    career_pages[page_no] = traveller_career_sections(page, page_no)
+                if prof.career_detect(page):
+                    career_pages[page_no] = prof.career_sections(page, page_no)
         if career_pages:
             kept: list[dict] = []
             for t in raw:
@@ -369,7 +365,8 @@ class DriveClient:
             # blocks; it is NOT stored — ``rules._tables_for_doc`` deliberately
             # re-runs ``classify_table`` at index time so routing fixes apply on a
             # rebuild without re-extracting, so a cached value would never be read.
-            category = classify_table(chap, t["rows"])
+            # The profile supplies chapter-fallback routing (item/transport chapters).
+            category = classify_table(chap, t["rows"], prof)
             if category == "noise":
                 continue
             title = t["title"]
