@@ -351,5 +351,89 @@ class TestCareerAnchorGuard(unittest.TestCase):
         self.assertFalse(_is_career_anchor([["Roll", "Personal Development"]]))
 
 
+class _FakePage:
+    """Minimal stand-in for a fitz Page that counts get_text() calls, so the
+    per-page memoization can be asserted without a real PDF."""
+
+    def __init__(self, dict_val=None, words_val=None):
+        self._dict = {"blocks": []} if dict_val is None else dict_val
+        self._words = [] if words_val is None else words_val
+        self.calls = {"dict": 0, "words": 0}
+
+    def get_text(self, kind="text"):
+        if kind == "dict":
+            self.calls["dict"] += 1
+            return self._dict
+        if kind == "words":
+            self.calls["words"] += 1
+            return self._words
+        return ""
+
+
+class TestPageTextMemo(unittest.TestCase):
+    """Per-page get_text caching that makes the Traveller career scan cheap (it
+    runs the heading scan on every page, then re-scans career pages)."""
+
+    def test_dict_and_words_parsed_once_per_page(self):
+        from lorehound.pdf_tables import _page_dict, _page_words
+
+        p = _FakePage(dict_val={"blocks": [1]}, words_val=[("w",)])
+        self.assertIs(_page_dict(p), _page_dict(p))  # same object, served from cache
+        self.assertEqual(p.calls["dict"], 1)
+        _page_words(p)
+        _page_words(p)
+        self.assertEqual(p.calls["words"], 1)
+
+
+class TestTravListTransforms(unittest.TestCase):
+    """Pure grid transforms used by every section reconstructor."""
+
+    def test_drop_empty_cols(self):
+        from lorehound.pdf_tables import _trav_drop_empty_cols
+
+        self.assertEqual(
+            _trav_drop_empty_cols([["A", "", "B"], ["1", "", "2"]]),
+            [["A", "B"], ["1", "2"]],
+        )
+
+    def test_merge_headerless_spill_into_left(self):
+        from lorehound.pdf_tables import _trav_merge_headerless_cols
+
+        # The 3rd column has a blank header -> a wrapped-cell spill; fold it left.
+        rows = [["Roll", "Skill", ""], ["1", "Melee", "(unarmed)"], ["2", "Drive", ""]]
+        self.assertEqual(
+            _trav_merge_headerless_cols(rows),
+            [["Roll", "Skill"], ["1", "Melee (unarmed)"], ["2", "Drive"]],
+        )
+
+
+class TestTravSectionReconstructors(unittest.TestCase):
+    """The remaining geometric career-section reconstructors (Ranks, Mustering)."""
+
+    def test_ranks_dedups_repeated_header(self):
+        from lorehound.pdf_tables import _trav_ranks_section
+
+        words = [_w(85, 0, "RANK"), _w(300, 0, "SKILL"),
+                 _w(85, 14, "RANK"), _w(300, 14, "SKILL")]  # uppercase shadow duplicate
+        for i, y in enumerate((28, 42, 56)):
+            words += [_w(85, y, str(i)), _w(300, y, "Admin")]
+        secs = _trav_ranks_section(words, 5, -10, 100)
+        self.assertEqual(len(secs), 1)
+        self.assertEqual(secs[0]["title"], "Ranks and bonuses")
+        rank_hdrs = [r for r in secs[0]["rows"] if r[0].strip().upper().startswith("RANK")]
+        self.assertEqual(len(rank_hdrs), 1)  # the shadow header row was deduped
+
+    def test_mustering_reconstructs_cash_benefits(self):
+        from lorehound.pdf_tables import _trav_mustering_section
+
+        words = [_w(315, 0, "1D"), _w(385, 0, "CASH"), _w(455, 0, "BENEFITS")]
+        for i, y in enumerate((14, 28, 42), start=1):
+            words += [_w(315, y, str(i)), _w(385, y, "Cr1000"), _w(455, y, "Weapon")]
+        secs = _trav_mustering_section(words, 5, -10, 100)
+        self.assertEqual(len(secs), 1)
+        self.assertEqual(secs[0]["title"], "Mustering out benefits")
+        self.assertGreaterEqual(len(secs[0]["rows"]), 4)  # header + 3 benefit rows
+
+
 if __name__ == "__main__":
     unittest.main()
