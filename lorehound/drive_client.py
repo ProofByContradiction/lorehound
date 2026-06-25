@@ -86,7 +86,8 @@ class DriveDoc:
     mime_type: str
     text: str
     # Structured tables recovered from the PDF: each
-    # {page, chapter, section, title, category, rows}.
+    # {page, chapter, section, title, rows}. (Routing category is recomputed at
+    # index time in rules._tables_for_doc, so it isn't stored here.)
     tables: list[dict] = field(default_factory=list)
 
 
@@ -364,6 +365,10 @@ class DriveClient:
             chap, sec = chapter_section(t["page"])
             if chap.lower().startswith("contents"):
                 continue  # the book's own table of contents, not a game table
+            # ``category`` is used here only to drop noise and to spot ship stat
+            # blocks; it is NOT stored — ``rules._tables_for_doc`` deliberately
+            # re-runs ``classify_table`` at index time so routing fixes apply on a
+            # rebuild without re-extracting, so a cached value would never be read.
             category = classify_table(chap, t["rows"])
             if category == "noise":
                 continue
@@ -382,7 +387,6 @@ class DriveClient:
                     "chapter": chap,
                     "section": sec,
                     "title": title,
-                    "category": category,
                     "rows": t["rows"],
                 }
             )

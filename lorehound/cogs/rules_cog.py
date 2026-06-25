@@ -14,6 +14,7 @@ button reposts the picked result publicly. Only dice rolls and @mention are publ
 from __future__ import annotations
 
 import asyncio
+from typing import NamedTuple
 
 import discord
 from discord import app_commands
@@ -23,23 +24,51 @@ from .. import ui
 from ..rules import RulesService, table_topic
 from ..search_index import Chunk, SearchHit, tokenize
 from ..tables import _name_col, render_item, render_table
+from ..text_utils import clean_grid
 
 TEAL = discord.Colour.dark_teal()
 GREEN = discord.Colour.green()
 
-# Per-category accent colours so each result type reads distinctly (like the dice
-# cards). Falls back to TEAL (used for mixed /lookup lists).
-_ACCENT = {
-    "rules": discord.Colour.blurple(),
-    "items": discord.Colour.gold(),
-    "transport": discord.Colour.blue(),
-    "tables": discord.Colour.green(),
-    "card": discord.Colour.dark_red(),
+
+class _Category(NamedTuple):
+    """Presentation metadata for one result category: its badge emoji, display
+    label, accent colour, and whether the unified /lookup includes it."""
+    emoji: str
+    label: str
+    accent: discord.Colour
+    in_lookup: bool
+
+
+# Single source of truth for per-category presentation. Each result type reads
+# distinctly (like the dice cards): its own badge emoji, label, and accent colour.
+# ``in_lookup=False`` excludes a category from the unified /lookup — "reference"
+# (the book's alphabetical index / page-footer fragments) is clutter, so it's out.
+CATEGORIES: dict[str, _Category] = {
+    "rules": _Category("📖", "Rules", discord.Colour.blurple(), True),
+    "items": _Category("🎒", "Items", discord.Colour.gold(), True),
+    "transport": _Category("🚙", "Transport", discord.Colour.blue(), True),
+    "tables": _Category("📊", "Tables", discord.Colour.green(), True),
+    "card": _Category("🪖", "Careers", discord.Colour.dark_red(), True),
+    # Excluded from /lookup; emoji/label/accent match the old unknown-category
+    # fallbacks (📖 / "" / TEAL) so any stray reference hit renders identically.
+    "reference": _Category("📖", "", TEAL, False),
 }
+# Categories the unified /lookup skips (derived from the registry so the call site
+# keeps its exact ``category not in _LOOKUP_SKIP`` membership test). == {"reference"}.
+_LOOKUP_SKIP = {name for name, c in CATEGORIES.items() if not c.in_lookup}
 
 
 def _accent(category: str) -> discord.Colour:
-    return _ACCENT.get(category, TEAL)
+    c = CATEGORIES.get(category)
+    return c.accent if c is not None else TEAL
+
+
+def _meta(category: str) -> tuple[str, str]:
+    """``(emoji, label)`` for a category, with the unknown-category fallback the
+    old ``_META.get(...)`` sites used (a generic 📖 book and an empty label)."""
+    c = CATEGORIES.get(category)
+    return (c.emoji, c.label) if c is not None else ("📖", "")
+
 
 _NOT_CONFIGURED = (
     "📚 Google Drive isn't connected yet. Add your `DRIVE_FOLDER_ID` and Google "
@@ -48,21 +77,11 @@ _NOT_CONFIGURED = (
 _NOT_READY = (
     "📚 Nothing indexed yet — give it a minute after startup, or run `/reindex`."
 )
-_META = {
-    "rules": ("📖", "Rules"),
-    "items": ("🎒", "Items"),
-    "transport": ("🚙", "Transport"),
-    "tables": ("📊", "Tables"),
-    "card": ("🪖", "Careers"),
-}
-# Categories /lookup searches — everything players care about. "reference" (the
-# book's alphabetical index / page-footer fragments) is clutter, so it's excluded.
-_LOOKUP_SKIP = {"reference"}
 
 
 def _badge(category: str) -> str:
     """The type emoji for a result category (used by /lookup's mixed list)."""
-    return _META.get(category, ("📖", ""))[0]
+    return _meta(category)[0]
 
 
 def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
@@ -74,8 +93,7 @@ def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
     out: list[SearchHit] = []
     seen: set[tuple] = set()
     for h in hits:
-        rows = [[(c or "").strip() for c in r] for r in (h.chunk.rows or [])
-                if any((c or "").strip() for c in r)]
+        rows = clean_grid(h.chunk.rows or [])
         # Only explode genuine stat catalogs (multi-row, several columns); leave
         # narrow rules/feature tables as normal hits so they don't pollute the list.
         if len(rows) < 3 or len(rows[0]) < 4:
@@ -233,7 +251,7 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
     """The body blocks for one result — a title, the text or rendered table, and
     a source/page footnote. Reused by the inline detail and the public repost."""
     c = hit.chunk
-    emoji, _ = _META.get(c.category, ("📖", ""))
+    emoji, _ = _meta(c.category)
     heading = (c.section or query)[:250]
     if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
         # For gear lookups, pull just the matching item's row as a Stat|Value card
@@ -489,6 +507,28 @@ class RulesCog(commands.Cog):
                 return b
         return None
 
+    async def _resolve_or_reject(
+        self, interaction: discord.Interaction, source: str
+    ) -> str | None:
+        """Shared command guard-preamble: Drive configured? index ready? is
+        ``source`` a known game? Sends the matching ephemeral error and returns
+        ``None`` on any failure, else returns the resolved game name."""
+        if self.rules.drive is None:
+            await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
+            return None
+        if not self.rules.ready:
+            await interaction.response.send_message(_NOT_READY, ephemeral=True)
+            return None
+        game = _resolve_game(self.rules, source)
+        if game is None:
+            available = ", ".join(f"`{g}`" for g in self.rules.index.games) or "(none)"
+            await interaction.response.send_message(
+                f"⚠️ I don't have a game called **{source}**. Available: {available}",
+                ephemeral=True,
+            )
+            return None
+        return game
+
     async def _lookup(
         self,
         interaction: discord.Interaction,
@@ -499,20 +539,8 @@ class RulesCog(commands.Cog):
     ) -> None:
         """Shared search flow. ``category=None`` is the unified /lookup: it searches
         every category (badged by type), skipping the reference index."""
-        if self.rules.drive is None:
-            await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
-            return
-        if not self.rules.ready:
-            await interaction.response.send_message(_NOT_READY, ephemeral=True)
-            return
-
-        game = _resolve_game(self.rules, source)
+        game = await self._resolve_or_reject(interaction, source)
         if game is None:
-            available = ", ".join(f"`{g}`" for g in self.rules.index.games) or "(none)"
-            await interaction.response.send_message(
-                f"⚠️ I don't have a game called **{source}**. Available: {available}",
-                ephemeral=True,
-            )
             return
 
         chosen_book: str | None = None
@@ -538,7 +566,7 @@ class RulesCog(commands.Cog):
             hits = self.rules.search(
                 query, game=game, book=chosen_book, category=category, top_k=8
             )
-            emoji, label = _META[category]
+            emoji, label = _meta(category)
             badges = False
             if category in ("items", "transport") and hits:
                 # A weapon/vehicle catalog is a list of items, not one wide grid:
@@ -663,19 +691,8 @@ class RulesCog(commands.Cog):
     async def class_card(
         self, interaction: discord.Interaction, source: str, career: str
     ) -> None:
-        if self.rules.drive is None:
-            await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
-            return
-        if not self.rules.ready:
-            await interaction.response.send_message(_NOT_READY, ephemeral=True)
-            return
-        game = _resolve_game(self.rules, source)
+        game = await self._resolve_or_reject(interaction, source)
         if game is None:
-            available = ", ".join(f"`{g}`" for g in self.rules.index.games) or "(none)"
-            await interaction.response.send_message(
-                f"⚠️ I don't have a game called **{source}**. Available: {available}",
-                ephemeral=True,
-            )
             return
         # find_career may search-assemble (in-memory, fast) for systems without
         # structured cards, so no off-thread work is needed.
@@ -706,19 +723,8 @@ class RulesCog(commands.Cog):
     async def table(
         self, interaction: discord.Interaction, source: str, name: str
     ) -> None:
-        if self.rules.drive is None:
-            await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
-            return
-        if not self.rules.ready:
-            await interaction.response.send_message(_NOT_READY, ephemeral=True)
-            return
-        game = _resolve_game(self.rules, source)
+        game = await self._resolve_or_reject(interaction, source)
         if game is None:
-            available = ", ".join(f"`{g}`" for g in self.rules.index.games) or "(none)"
-            await interaction.response.send_message(
-                f"⚠️ I don't have a game called **{source}**. Available: {available}",
-                ephemeral=True,
-            )
             return
         # Stricter relevance: a dominant exact match opens alone instead of dragging
         # in tables that merely share a word (e.g. other "… Modifiers" tables).

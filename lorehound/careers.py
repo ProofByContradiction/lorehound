@@ -24,6 +24,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .text_utils import acronym_title as _title
+
 _D6_MARKER = re.compile(r"(?:special|talent|perk).*\(?\s*d6", re.I)  # "SPECIALITIES (D6)"
 _ROLL_LABEL = re.compile(r"^\d{1,2}$")          # a roll-table row index: "1".."12"
 _NAME_OK = re.compile(r"[A-Za-z]{2,}")          # a real name has letters
@@ -53,22 +55,6 @@ def _looks_like_name(cell: str) -> bool:
     if not c or _ROLL_LABEL.match(c) or _D6_MARKER.search(c):
         return False
     return bool(_NAME_OK.search(c))
-
-
-def _title(s: str) -> str:
-    """Normalize an ALL-CAPS card label/name for display ("REQUIREMENTS" ->
-    "Requirements"), but keep short all-caps acronyms intact ("EMT" stays "EMT")."""
-    if not s.strip():
-        return s.strip()
-    out = []
-    for w in s.split():
-        if w.isalpha() and w.isupper() and len(w) <= 3:
-            out.append(w)              # acronym: EMT, FBI
-        elif w.isupper():
-            out.append(w.title())      # FIREMAN -> Fireman, ARMS -> Arms
-        else:
-            out.append(w)              # already mixed-case
-    return " ".join(out)
 
 
 # --- Structured detector: column cards (T2K) --------------------------------

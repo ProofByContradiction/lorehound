@@ -13,6 +13,9 @@ from __future__ import annotations
 import re
 import textwrap
 
+from .text_utils import acronym_title as _label
+from .text_utils import clean_grid
+
 _WORD = re.compile(r"[a-z0-9]+")
 
 _ESC = "\x1b"
@@ -96,20 +99,6 @@ def _name_col(grid: list[list[str]]) -> int:
         if vals and sum(any(c.isalpha() for c in v) for v in vals) / len(vals) >= 0.5:
             return j
     return 0
-
-
-def _label(s: str) -> str:
-    """Tidy a column header for use as an inline field label: title-case ALL-CAPS
-    words but keep short acronyms ("ROF" stays "ROF", "TIME LIMIT" -> "Time Limit")."""
-    out = []
-    for w in s.split():
-        if w.isupper() and w.isalpha() and len(w) <= 3:
-            out.append(w)
-        elif w.isupper():
-            out.append(w.title())
-        else:
-            out.append(w)
-    return " ".join(out)
 
 
 def _render_vertical(grid: list[list[str]]) -> str:
@@ -283,7 +272,7 @@ def _render_grid(grid: list[list[str]], budget: int) -> tuple[str, bool]:
 def match_row(rows: list[list[str]], query: str) -> int | None:
     """Index of the data row whose name clearly matches the query, else None — used
     to pull a single item ("M82A1") out of a stat table as its own card."""
-    grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
+    grid = clean_grid(rows)
     qt = _toks(query)
     if not qt or len(grid) < 2:
         return None
@@ -307,7 +296,7 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     becomes a row (the stat label on the left, its value on the right) — titled by
     the item name (returned so the caller can use it as the card header).
     ``item_name`` is None when no single row matched (whole-table fallback)."""
-    grid = [[(c or "").strip() for c in r] for r in rows if any((c or "").strip() for c in r)]
+    grid = clean_grid(rows)
     # Component stat block (e.g. a Traveller ship): rows already *are* the stats,
     # so render col0 as the label and the rest of the row as the value — no row to
     # match against. The ship name comes from the chunk's heading, not the grid.
