@@ -23,7 +23,7 @@ def tokenize(text: str) -> list[str]:
 class Chunk:
     game: str            # e.g. "Twilight: 2000"
     source: str          # book file, e.g. "T2K Lore.pdf"
-    category: str        # "rules" | "items" | "vehicles"
+    category: str        # rules | items | transport | tables | card | reference | noise
     section: str         # heading breadcrumb, e.g. "Combat & Damage › Explosions › Sniper"
     locator: str         # "p. 69"
     text: str

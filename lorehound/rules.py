@@ -414,20 +414,19 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
     a catalogue)."""
     from collections import defaultdict
 
-    from .tables import _name_col, is_ship_statblock
+    from .tables import _SHIP_PARTS, _name_col, is_ship_statblock
 
     # Traveller renders each ship as a per-ship table whose *rows* are its
     # components (Hull, Bridge, M-Drive…) and whose name lives in the title, not
     # a column — so the name column yields ship systems, not vehicles. Drop those
     # stable system terms so they don't masquerade as vehicles in /transport.
-    ship_parts = frozenset({
-        "hull", "bridge", "cargo", "cargo the", "common cargo", "computer",
-        "computer software systems", "sensors", "armour", "armoured bulkheads",
-        "bulkheads", "fuel", "fuel tanks", "power", "power plant", "m-drive",
-        "j-drive", "drive", "staterooms", "common areas", "software", "systems",
-        "weapons", "ammunition", "airlock", "acceleration bench",
-        "maintenance purchase", "tl7", "heavy", "light", "craft",
-    })
+    # Reuse the statblock-detection vocabulary (single source of truth) plus a few
+    # catalogue-leak phrasings that only show up in the name column.
+    ship_parts = _SHIP_PARTS | {
+        "cargo the", "common cargo", "computer software systems", "bulkheads",
+        "ammunition", "acceleration bench", "maintenance purchase", "tl7",
+        "heavy", "light", "craft",
+    }
 
     names: dict[tuple[str, str], dict[str, str]] = defaultdict(dict)
     for c in chunks:

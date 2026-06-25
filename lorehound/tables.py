@@ -164,20 +164,28 @@ def _roll_key_col(grid: list[list[str]]) -> int | None:
     return 0 if head and _DIE_HDR.match(head[0].strip()) else None
 
 
-def _statblock_card(grid: list[list[str]]) -> tuple[str, bool]:
-    """Render a component stat block (rows *are* the stats — first column is a
-    label, no header row) as a Stat | Value card: col0 is the label, the rest of
-    the row joined is the value. Renders via _render_grid directly (not
-    render_table) so the 2-column result can't recurse back into detection."""
+def _stat_card(pairs: list[tuple[str, str]]) -> tuple[str, bool]:
+    """Render (label, value) pairs as a 2-column ``Stat | Value`` card. Empty
+    values are dropped; returns ``("", False)`` when nothing survives so callers
+    can fall back to the whole table. Uses _render_grid directly (not
+    render_table) so the 2-column result can't recurse back into stat-block
+    detection. Returns ``(block, wide)`` — the honest width flag from _render_grid."""
     stats = [["Stat", "Value"]]
-    for row in grid:
-        label = row[0].strip()
-        value = " ".join(c.strip() for c in row[1:] if c.strip())
+    for label, value in pairs:
         if label and value:
             stats.append([label, value])
     if len(stats) < 2:
         return "", False
     return _render_grid(stats, _BUDGET)
+
+
+def _statblock_card(grid: list[list[str]]) -> tuple[str, bool]:
+    """Render a component stat block (rows *are* the stats — first column is a
+    label, no header row) as a Stat | Value card: col0 is the label, the rest of
+    the row joined is the value."""
+    return _stat_card(
+        [(row[0].strip(), " ".join(c.strip() for c in row[1:] if c.strip())) for row in grid]
+    )
 
 
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
@@ -318,13 +326,9 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     row = grid[r] + [""] * (ncols - len(grid[r]))
     name_col = _name_col([header, row])
     name = row[name_col] if name_col < len(row) and row[name_col] else query
-    stats = [["Stat", "Value"]]
-    for j in range(ncols):
-        if j == name_col or not row[j]:
-            continue
-        stats.append([header[j] or "—", row[j]])
-    if len(stats) < 2:  # nothing but the name — fall back to the whole table
+    pairs = [(header[j] or "—", row[j]) for j in range(ncols) if j != name_col and row[j]]
+    block, wide = _stat_card(pairs)
+    if not block:  # nothing but the name — fall back to the whole table
         block, wide = render_table(rows)
         return block, wide, None
-    block, _wide = _render_grid(stats, _BUDGET)
-    return block, False, name
+    return block, wide, name
