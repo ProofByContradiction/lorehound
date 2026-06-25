@@ -38,29 +38,66 @@ _DEF_ENTRY = re.compile(
 
 _TARGET_WORDS = 110
 
-# Heading/book keywords used to classify a chunk. "rules" = how to play
-# (character stats, abilities, specialties, procedures). "items" and "vehicles"
-# = the tools players use. Matched against book name + chapter/section headings
-# only (not body), most-specific-first, so a rule that merely mentions a weapon
-# stays a rule. Vehicles take precedence over items (e.g. "ship weapon").
-_VEHICLE = re.compile(
-    r"\b(vehicle|vehicles|ship|ships|starship|spacecraft|small craft|high guard|"
-    r"adventure class|aircraft|watercraft|boat|tank|mecha|hull|thruster|"
-    r"spinal mount|turret)\b",
-    re.I,
+# ── Content-classification vocabulary ───────────────────────────────────────
+# Three layers route a chunk into rules / items / transport, each matching a
+# different view of the same page. The keyword families live here once; the
+# matchers below compose them, each with its own delimiters:
+#   • HEADING — _ITEM / _VEHICLE, run over book name + chapter/section headings
+#     ONLY (not body), so a rule that merely *mentions* a weapon stays a rule.
+#     Vehicles take precedence over items (e.g. "ship weapon").
+#   • COLUMN  — _WEAPON_TABLE / _VEHICLE_TABLE, run over a Markdown stat-table's
+#     column names, to re-tag a weapon/vehicle block hiding under a rules
+#     heading (e.g. a T2K weapon write-up in the Combat chapter). Real rules
+#     never carry these columns.
+#   • PROSE   — _WEAPON_WORDS, weapon-type phrases that appear in equipment
+#     write-ups but never in rules prose.
+# A fourth layer — reconstructed cell grids, not Markdown — lives in
+# pdf_tables.classify_table (header-keyword routing for structured tables).
+
+
+def _alt(*terms: str) -> str:
+    """Regex alternation body from literal terms or sub-patterns (e.g. 'armou?r')."""
+    return "|".join(terms)
+
+
+# HEADING layer.
+_VEHICLE_HEADINGS = (
+    "vehicle", "vehicles", "ship", "ships", "starship", "spacecraft",
+    "small craft", "high guard", "adventure class", "aircraft", "watercraft",
+    "boat", "tank", "mecha", "hull", "thruster", "spinal mount", "turret",
 )
-_ITEM = re.compile(
-    r"\b(gear|equipment|equip|weapon|weapons|armou?r|supply|catalog|catalogue|"
-    r"item|items|kit|robot|robots|drone|drones|gadget|loadout|trade good|"
-    r"cybernetic|augment|firearm|rifle|pistol|shotgun|grenade|ammunition|melee)\b",
-    re.I,
+_ITEM_HEADINGS = (
+    "gear", "equipment", "equip", "weapon", "weapons", "armou?r", "supply",
+    "catalog", "catalogue", "item", "items", "kit", "robot", "robots", "drone",
+    "drones", "gadget", "loadout", "trade good", "cybernetic", "augment",
+    "firearm", "rifle", "pistol", "shotgun", "grenade", "ammunition", "melee",
 )
+_VEHICLE = re.compile(rf"\b(?:{_alt(*_VEHICLE_HEADINGS)})\b", re.I)
+_ITEM = re.compile(rf"\b(?:{_alt(*_ITEM_HEADINGS)})\b", re.I)
+
+# COLUMN layer — Markdown stat-table column names.
+_WEAPON_COLUMNS = ("ROF", "WEAPON")
+_VEHICLE_COLUMNS = (
+    "TRAVEL SPEED", "COMBAT SPEED", "PASSENGERS", "MANEUVER", "THRUST", "HULL",
+)
+_WEAPON_TABLE = re.compile(rf"\|\s*(?:{_alt(*_WEAPON_COLUMNS)})\s*\|", re.I)
+_VEHICLE_TABLE = re.compile(rf"\|\s*(?:{_alt(*_VEHICLE_COLUMNS)})\s*\|", re.I)
+
+# PROSE layer — weapon-type phrases.
+_WEAPON_TYPES = (
+    "assault rifle", "sniper rifle", "battle rifle", "submachine gun",
+    "machine gun", "bolt-action", "grenade launcher", "shotgun", "revolver",
+    "carbine",
+)
+_WEAPON_WORDS = re.compile(rf"\b(?:{_alt(*_WEAPON_TYPES)})\b", re.I)
 
 
 # Topic buckets for grouping the /table list when browsing. Generic TTRPG topics
 # matched on the table NAME first (most reliable — a "RADIATION SICKNESS" table
 # lives under a "Combat & Damage" chapter but is Health), then the chapter. Order
-# matters: the first topic whose keyword is found wins.
+# matters: the first topic whose keyword is found wins. This is a *browsing*
+# taxonomy (deliberately stemmed — "forag", "armou", "thrust" — for prefix hits),
+# distinct from the routing vocabulary above; the two are not interchangeable.
 _TABLE_TOPICS: list[tuple[str, tuple[str, ...]]] = [
     ("Health", ("disease", "radiat", "sick", "heal", "medical", "surger", "trauma",
                 "poison", "drug", "infect", "fatigue", "blister")),
@@ -134,22 +171,6 @@ def _category(book: str, chapter: str, section: str) -> str:
         if _ITEM.search(text):
             return "items"
     return "rules"
-
-
-# Strong stat-table signatures in the body (Markdown tables from PyMuPDF). Used
-# to re-tag weapon/vehicle entries that hide under rules-chapter headings (e.g.
-# T2K weapon write-ups in the Combat chapter). Real rules never carry these.
-_WEAPON_TABLE = re.compile(r"\|\s*ROF\s*\||\|\s*WEAPON\s*\|", re.I)
-_VEHICLE_TABLE = re.compile(
-    r"\|\s*(?:TRAVEL SPEED|COMBAT SPEED|PASSENGERS|MANEUVER|THRUST|HULL)\s*\|",
-    re.I,
-)
-# Weapon-type phrases that appear in equipment write-ups but not in rules prose.
-_WEAPON_WORDS = re.compile(
-    r"\b(assault rifle|sniper rifle|battle rifle|submachine gun|machine gun|"
-    r"bolt-action|grenade launcher|shotgun|revolver|carbine)\b",
-    re.I,
-)
 
 
 def _content_category(body: str) -> str | None:
