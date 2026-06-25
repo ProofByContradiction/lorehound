@@ -57,9 +57,11 @@ class _Btn(discord.ui.Button):
 
 
 class _StepSelect(discord.ui.Select):
-    """A dropdown for a CHOICE step; resolving advances the shared session."""
+    """A dropdown for a CHOICE step; resolving calls the view's advance handler.
+    The handler is passed in explicitly rather than read off ``self.view`` (which
+    isn't reliably set for components nested in a LayoutView)."""
 
-    def __init__(self, step: Step):
+    def __init__(self, step: Step, on_pick):
         options = [
             discord.SelectOption(
                 label=o.label[:100],
@@ -69,9 +71,10 @@ class _StepSelect(discord.ui.Select):
             for o in step.options[:25]
         ]
         super().__init__(placeholder="Choose…", min_values=1, max_values=1, options=options)
+        self._on_pick = on_pick
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self.view.advance(interaction, self.values[0])  # type: ignore[attr-defined]
+        await self._on_pick(interaction, self.values[0])
 
 
 class ChargenView(discord.ui.LayoutView):
@@ -143,7 +146,7 @@ class ChargenView(discord.ui.LayoutView):
         container.add_item(ui.separator())
         row = discord.ui.ActionRow()
         if step.kind == StepKind.CHOICE:
-            row.add_item(_StepSelect(step))
+            row.add_item(_StepSelect(step, self.advance))
         elif step.kind == StepKind.ROLL:
             row.add_item(_Btn(self._make_advance(), "Roll",
                               style=discord.ButtonStyle.primary, emoji="🎲"))

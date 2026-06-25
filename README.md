@@ -31,6 +31,7 @@ Slash commands (`/help` is authoritative):
 /transport source:<game> query:…    # vehicles, ships, craft, mounts & parts
 /class source:<game> career:<name>  # career/class card (requirements, skills, specialties)
 /table source:<game> name:<table>   # find & print a rules table
+/character source:<game>            # build a character: quick-gen or step-by-step
 /sources                            # list the games + books available
 /reindex [force:true]               # (operator) re-pull and re-index from Drive
 ```
@@ -39,6 +40,15 @@ Lookups (`/rule`, `/item`, `/transport`, `/table`) take a `source:` game (with
 autocomplete) and most take an optional `book:`. They reply **privately** with a
 ranked list — pick one to read in full (cited by book + page), then optionally
 **📢 Show in channel**. Only dice rolls and @mention replies are public.
+
+**Character creation (`/character`).** An interactive, private flow: choose
+**guided quick-gen** (the bot rolls and picks, pausing only for the defining
+decisions) or **faithful step-by-step** (you make every choice and roll). Re-roll
+or **📢 Show in channel** when done. It reads career/skill/specialty data from the
+indexed books, so it only appears for games that have it (Twilight 2000 first) and
+is unavailable while the library is (re-)indexing. Generation mechanics are an aid —
+attribute/skill allocation uses a standard spread; confirm against your table for
+strict rules-as-written.
 
 **Twilight 2000 dice — double-check me.** Ratings A=d12 B=d10 C=d8 D=d6; each die
 **6+** is a success (10+ counts as two); ammo-die **6s** are extra hits and **1s**

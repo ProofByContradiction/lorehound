@@ -41,6 +41,14 @@ def capabilities_card(bot: commands.Bot) -> discord.ui.LayoutView:
             "`/sources` — list games & books  ·  `/reindex` — re-index the library (operator)"
         ),
         ui.separator(),
+        ui.text(
+            "**🎖️ Character creation**\n"
+            "`/character source:<game>` — build a character step-by-step. Pick "
+            "**guided quick-gen** (I roll & pick, pausing for the big decisions) or "
+            "**faithful step-by-step** (you make every call), then re-roll or share it.\n"
+            "-# Available where the library has character data — Twilight 2000 to start."
+        ),
+        ui.separator(),
         ui.text("-# `/help` shows this · you can also **@mention me** anytime"),
         accent=discord.Colour.blurple(),
     )
