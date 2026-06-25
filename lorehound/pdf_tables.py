@@ -529,11 +529,40 @@ def _trav_is_upper(cell: str) -> bool:
     return bool(c) and bool(_TRAV_UPPER.match(c)) and any(ch.isalpha() for ch in c)
 
 
+def _page_dict(page) -> dict:
+    """``page.get_text("dict")`` memoized on the page object. Career detection runs
+    the heading scan on *every* page (3× per page: career-name + Mishaps + Events
+    checks) and the reconstructor reruns it on career pages — caching collapses all
+    of that to one parse per page. The same page object is reused across
+    career_detect/career_sections, so the cache lands. Best-effort: if the object
+    rejects the attribute we simply re-parse (correct, just not cached)."""
+    cached = getattr(page, "_lh_dict", None)
+    if cached is None:
+        cached = page.get_text("dict")
+        try:
+            page._lh_dict = cached
+        except Exception:  # noqa: BLE001 - some page objects reject attrs; recompute
+            pass
+    return cached
+
+
+def _page_words(page) -> list:
+    """``page.get_text("words")`` memoized on the page object (see :func:`_page_dict`)."""
+    cached = getattr(page, "_lh_words", None)
+    if cached is None:
+        cached = page.get_text("words")
+        try:
+            page._lh_words = cached
+        except Exception:  # noqa: BLE001
+            pass
+    return cached
+
+
 def _trav_section_headings(page) -> list[tuple[str, float, float, float]]:
     """(text, size, x0, y0) for every line on the page (heading detection by the
     caller). Multi-span lines are joined; size is the line's max span size."""
     out: list[tuple[str, float, float, float]] = []
-    for b in page.get_text("dict").get("blocks", []):
+    for b in _page_dict(page).get("blocks", []):
         for ln in b.get("lines", []):
             spans = ln.get("spans", [])
             txt = " ".join(s["text"] for s in spans).strip()
@@ -549,7 +578,7 @@ def _trav_heading_rects(page, min_size: float = 13.0) -> list[tuple[float, float
     set in the table's left margin) must be dropped from the data grids, where they
     would otherwise leak into a column."""
     rects: list[tuple[float, float, float, float]] = []
-    for b in page.get_text("dict").get("blocks", []):
+    for b in _page_dict(page).get("blocks", []):
         for ln in b.get("lines", []):
             spans = ln.get("spans", [])
             size = max((s["size"] for s in spans), default=0.0)
@@ -569,7 +598,7 @@ def _trav_words(page) -> list:
         return any(x0 - 1 <= cx <= x1 + 1 and y0 - 1 <= cy <= y1 + 1
                    for x0, y0, x1, y1 in rects)
 
-    return [w for w in page.get_text("words") if w[4].strip() and not in_heading(w)]
+    return [w for w in _page_words(page) if w[4].strip() and not in_heading(w)]
 
 
 def _trav_skills_sections(words, page_no, y_lo, y_hi) -> list[dict]:
@@ -842,7 +871,7 @@ def _traveller_careers(page, page_no, existing) -> list[dict]:
     # couple incidentally, so require >=3 to skip them.
     if sum(m in text for m in _TRAV_CAREER_MARKERS) < 3:
         return []
-    for b in page.get_text("dict").get("blocks", []):
+    for b in _page_dict(page).get("blocks", []):
         for ln in b.get("lines", []):
             spans = ln.get("spans", [])
             txt = " ".join(s["text"] for s in spans).strip()
