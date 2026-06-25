@@ -40,12 +40,15 @@ CUF_START = "D"              # Coolness Under Fire starts at D
 SKILLS_PER_TERM = 2          # one-step skill raises granted each term
 MAX_TERMS = 4                # career terms before the mandatory "At War" term
 RANGED_COMBAT = "Ranged Combat"  # first term must train this (T2K life-path rule)
+STARTING_AGE = 18            # characters begin the life path at 18 (core book)
+AGE_DICE = "1d6"             # years added per term (approx — see _FIDELITY_NOTE)
 
 _FIDELITY_NOTE = (
     "Attributes, childhood, and the per-term specialty check follow the "
     "rules-as-written (C baseline, 2D3 increases, CUF D; childhood class grants a "
-    "skill; 6+ skill roll earns a specialty). Aging isn't modelled yet and per-term "
-    "skill gains are slightly simplified — confirm those against your table."
+    "skill; 6+ skill roll earns a specialty). Age is tracked (~1D6/term from 18) but "
+    "the aging attribute-loss effects aren't modelled, and per-term skill gains are "
+    "slightly simplified — confirm those against your table."
 )
 
 
@@ -140,6 +143,7 @@ def _bump_skill(known: dict[str, str], skill: str, ctx) -> None:
 
 
 def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
+    age = STARTING_AGE
     for term in range(1, MAX_TERMS + 1):
         options = [
             Option(c.name, c.name, (c.rank or "civilian") + (f" · {c.requirements}" if c.requirements else ""))
@@ -178,6 +182,13 @@ def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
 
         draft.gear = list(career.gear)  # most recent posting determines starting gear
         draft.career_history.append(career.name + (f" ({spec_name})" if spec_name else ""))
+
+        age_roll = yield Step(
+            f"age_{term}", StepKind.ROLL, f"Term {term}: years served",
+            roll_spec=AGE_DICE, detail="Each term ages your character.",
+        )
+        age += age_roll.total or 0
+        draft.notes["Age"] = str(age)
 
         if term < MAX_TERMS:
             cont = yield Step(

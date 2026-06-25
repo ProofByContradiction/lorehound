@@ -297,6 +297,14 @@ class TestT2KFlow(unittest.TestCase):
         # Every skill roll succeeds (12): at least one specialty is earned.
         self.assertTrue(self._drive_with_roll(12).specialties)
 
+    def test_age_is_tracked(self):
+        from lorehound.chargen.engine import QUICK
+        s, _ = self._drive(QUICK, self._data())
+        age = int(s.draft.notes["Age"])
+        self.assertGreaterEqual(age, 18)              # starts at 18
+        if s.draft.career_history:
+            self.assertGreater(age, 18)               # each served term ages you
+
 
 class TestT2KProse(unittest.TestCase):
     """The childhood D6 table is parsed from the book's prose (blank-line-delimited
