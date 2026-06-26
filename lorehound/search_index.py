@@ -14,9 +14,36 @@ from dataclasses import dataclass, field
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Irregular / spelling equivalences that suffix-folding can't bridge (e.g. the
+# silent-e + i mutation in aging↔age, or British↔American spellings). Applied to
+# BOTH indexed text and queries, so "aging" finds a passage that says "age". Keep
+# this small and domain-general — it's normalization, not per-query tuning.
+_EQUIV = {
+    "aging": "age", "ageing": "age", "aged": "age",
+    "armour": "armor", "armoured": "armor", "armored": "armor",
+    "colour": "color", "favour": "favor", "metre": "meter",
+}
+
+
+def _stem(token: str) -> str:
+    """Fold a token to a conservative root so word forms match. Regular plurals
+    only (the dominant mismatch in rules text) — irregulars go through ``_EQUIV``.
+    Deliberately cautious: short words and -ss/-us/-is endings are left alone to
+    avoid over-stemming (verified against the retrieval eval)."""
+    t = _EQUIV.get(token, token)
+    if len(t) <= 4:
+        return t
+    if t.endswith("ies"):                       # specialties→specialty, mishaps fine
+        return t[:-3] + "y"
+    if t.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return t[:-2]                           # boxes→box, dashes→dash
+    if t.endswith("s") and not t.endswith(("ss", "us", "is", "ous")):
+        return t[:-1]                           # rolls→roll, modifiers→modifier
+    return t
+
 
 def tokenize(text: str) -> list[str]:
-    return _WORD_RE.findall(text.lower())
+    return [_stem(t) for t in _WORD_RE.findall(text.lower())]
 
 
 @dataclass
