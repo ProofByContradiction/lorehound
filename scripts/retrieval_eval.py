@@ -40,17 +40,17 @@ _STOP = frozenset(
 )
 _TOKEN = re.compile(r"[a-z0-9]+")
 
-# Top-k passages whose text a fact may appear in (matches "present in a retrieved
-# chunk" — the answer can be the 1st or a near hit).
-_TOP_K = 5
+# Top-k passages whose text a fact may appear in. Matches the bot's primary lookup
+# (`/rule` returns top_k=8 for the user to pick from), so the eval reflects what a
+# user actually sees — checking only the top 5 understated real recall.
+_TOP_K = 8
 _FACT_COVERAGE = 0.70   # fraction of a fact's content tokens that must be present
-# Health threshold for the standalone CLI. The measured baseline on the current
-# library was 0.32 fact-recall (2026-06-22): the right *sections* are retrieved,
-# but granular numeric values (difficulty/penalty tables) often sit in /table-
-# routed chunks that miss the top-k — known retrieval-ranking work, see README.
-# The in-suite regression FLOOR (tests/test_retrieval.py) is looser, so the test
-# only fails on a true drop, not on tuning noise.
-_DEFAULT_THRESHOLD = 0.30
+# Health threshold for the standalone CLI. Baseline was 0.32 fact-recall
+# (2026-06-22, top-5, 8 entries). The retrieval overhaul (stemming + worked-example
+# rescue) plus expanding/aligning the gold set lifted gate fact-recall to ~0.58
+# (2026-06-26, top-8 to match /rule). The in-suite regression FLOOR
+# (tests/test_retrieval.py) sits below this so the test fails only on a true drop.
+_DEFAULT_THRESHOLD = 0.45
 
 
 def load_gold(path: str = _GOLD) -> list[dict]:

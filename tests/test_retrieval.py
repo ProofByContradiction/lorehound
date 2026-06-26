@@ -21,10 +21,11 @@ import unittest
 from lorehound.search_index import Chunk, SearchIndex
 from scripts.retrieval_eval import _norm, fact_present, resolve_game
 
-# In-suite regression floor for the live gold eval. The measured baseline was
-# 0.32 fact-recall (2026-06-22); this floor is set below it so the test fails
-# only on a genuine retrieval regression, not on routine tuning noise.
-_REGRESSION_FLOOR = 0.25
+# In-suite regression floor for the live gold eval. After the retrieval overhaul
+# (stemming + worked-example rescue) gate fact-recall is ~0.58 (2026-06-26, top-8);
+# this floor sits well below that so the test fails only on a genuine regression,
+# not routine tuning noise.
+_REGRESSION_FLOOR = 0.45
 
 
 def _toks(s: str) -> set:
@@ -76,6 +77,63 @@ class TestRetrievalInvariants(unittest.TestCase):
 
     def test_empty_query_returns_nothing(self):
         self.assertEqual(self._index().search("   "), [])
+
+
+class TestRetrievalOverhaul(unittest.TestCase):
+    """Guards the retrieval overhaul on synthetic data (runs in CI): vocabulary
+    normalization (stemming/equivalence) and worked-example breadcrumb rescue."""
+
+    def test_stemming_bridges_word_forms(self):
+        idx = SearchIndex()
+        idx.build([
+            Chunk("T2K", "Core", "rules", "Player Characters › Aging", "p. 41",
+                  "From the second term roll a D8 for age effects; under your terms you lose a step."),
+            Chunk("T2K", "Core", "rules", "Combat › Cover", "p. 70",
+                  "Armoured vehicles give cover; modifiers apply to the roll."),
+        ])
+        # aging↔age (irregular equivalence), armor↔armour (spelling), plural folding.
+        self.assertIn("Aging", idx.search("aging", game="T2K")[0].chunk.section)
+        self.assertTrue(idx.search("armor", game="T2K"))            # finds "Armoured"
+        self.assertTrue(idx.search("modifier", game="T2K"))         # finds "modifiers"
+        self.assertTrue(idx.search("rolls", game="T2K"))            # plural folds to "roll"
+
+    def test_no_overstemming(self):
+        # Short words and -ss/-us/-is endings must NOT be folded together.
+        from lorehound.search_index import tokenize
+        self.assertEqual(tokenize("status"), ["status"])            # not "statu"/"stat*"
+        self.assertEqual(tokenize("success"), ["success"])         # -ss kept
+        self.assertEqual(tokenize("arms"), ["arms"])               # <=4 chars kept
+
+    def test_worked_example_attaches_to_parent_topic(self):
+        from lorehound.rules import _chunks_for_doc
+        text = (
+            "[[page 41]]\n## PLAYER CHARACTERS\n### AGING\n"
+            "Your character ages over their career and may suffer for it.\n"
+            "##### ~~**EXAMPLE**~~\n"
+            "He rolls a D8 for age effects and it comes up under his number of "
+            "terms, so he decreases one attribute by a step.\n"
+        )
+        chunks = _chunks_for_doc("Twilight 2000 (4E)/Core.pdf", text)
+        ex = [c for c in chunks if c.section.endswith("Example")]
+        self.assertTrue(ex, "example chunk should exist")
+        # It keeps the parent topic instead of an orphan banner…
+        self.assertIn("aging", ex[0].section.lower())
+        # …and the strikethrough/bold noise is gone from every breadcrumb.
+        self.assertFalse(any("~~" in c.section or "**" in c.section for c in chunks))
+
+    def test_example_is_retrievable_by_topic(self):
+        from lorehound.rules import _chunks_for_doc
+        text = (
+            "[[page 41]]\n## PLAYER CHARACTERS\n### AGING\n"
+            "Your character ages over their career.\n"
+            "##### ~~**EXAMPLE**~~\n"
+            "He rolls a D8 for age effects under his number of terms and loses a step.\n"
+        )
+        idx = SearchIndex()
+        idx.build(_chunks_for_doc("Twilight 2000 (4E)/Core.pdf", text))
+        hits = idx.search("aging", game="Twilight 2000 (4E)")
+        self.assertTrue(hits)
+        self.assertIn("aging", hits[0].chunk.section.lower())  # the rescued example surfaces
 
 
 class TestGoldMatching(unittest.TestCase):

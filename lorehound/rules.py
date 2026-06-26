@@ -195,11 +195,31 @@ def _split_game_and_file(path: str) -> tuple[str, str]:
     return "General", path
 
 
+def _strip_md(s: str) -> str:
+    """Drop the inline markdown that leaks from PDF extraction into titles/body —
+    bold ``**`` and strikethrough ``~~`` (the latter is how worked-example banners
+    render, e.g. ``~~**EXAMPLE**~~``)."""
+    return s.replace("~~", "").replace("**", "")
+
+
+# A worked-example banner. T2K renders these struck-through (``~~EXAMPLE~~``); the
+# heading word may be just "EXAMPLE" or "EXAMPLE: <name>" / "Worked example".
+_EXAMPLE_HEADING = re.compile(r"^(worked\s+)?example\b", re.I)
+
+
+def _is_example_heading(raw: str, title: str) -> bool:
+    """True if a heading is a worked-example banner — recognised by the "example"
+    word or by strikethrough on a short heading. Such a chunk is kept UNDER its
+    parent section (as an "Example" leaf) rather than letting the banner replace the
+    breadcrumb, so the example inherits the topic it illustrates."""
+    return bool(_EXAMPLE_HEADING.match(title) or ("~~" in raw and len(title.split()) <= 5))
+
+
 def _clean(line: str) -> str:
     line = line.strip()
     if not line or _PICTURE.search(line) or _WATERMARK.search(line):
         return ""
-    return line.replace("<br>", " ").replace("**", "").strip()
+    return _strip_md(line.replace("<br>", " ")).strip()
 
 
 def _pages(text: str) -> list[tuple[str, str]]:
@@ -214,7 +234,7 @@ def _heading(line: str) -> tuple[int, str] | None:
     """Return (level, title) if the line is a heading, else None."""
     m = _MD_HEADER.match(line)
     if m:
-        return len(m.group(1)), m.group(2).replace("**", "").strip()
+        return len(m.group(1)), _strip_md(m.group(2)).strip()
     m = _T2K_CHAPTER.match(line)
     if m:
         return 1, m.group(2).title().strip()  # ALL-CAPS -> Title Case
@@ -267,11 +287,14 @@ def _chunks_for_doc(path: str, text: str) -> list[Chunk]:
             if h:
                 flush()  # close the previous section's chunk
                 level, title = h
-                if level <= 1:
-                    chapter, section = title, ""
+                if _is_example_heading(stripped, title):
+                    # Keep the parent section; file the example beneath it so it
+                    # inherits the topic it illustrates (instead of an orphan crumb).
+                    entry = "Example"
+                elif level <= 1:
+                    chapter, section, entry = title, "", ""
                 else:
-                    section = title
-                entry = ""  # a new heading ends any run of definition entries
+                    section, entry = title, ""
                 buf_page = page_label
                 continue
             d = _DEF_ENTRY.match(stripped)

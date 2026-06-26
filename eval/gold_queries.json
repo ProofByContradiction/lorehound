@@ -12,7 +12,7 @@
       "T2K (Free League 4E) has no free authoritative SRD; T2K entries below are core mechanics from twilight.py, not an external source."
     ],
     "created": "2026-06-21",
-    "status": "wired into scripts/retrieval_eval.py + tests/test_retrieval.py (regression guard). Baseline fact-recall 0.32 (2026-06-22): right sections retrieved, but granular table values often miss top-k. Expand as new sources arrive."
+    "status": "wired into scripts/retrieval_eval.py + tests/test_retrieval.py (regression guard). Baseline fact-recall 0.32 (2026-06-22, 8 stable entries). 2026-06-26: added 4 T2K targets (aging, war-breaks-out, encumbrance, radiation) that the retrieval overhaul drives up — they're prose rules buried in worked examples / unindexed by natural queries. Expand as new sources arrive."
   },
   "entries": [
     {
@@ -97,6 +97,46 @@
       "source": "lorehound/twilight.py",
       "source_tier": "repo-mechanics",
       "edition_sensitive": false
+    },
+    {
+      "id": "t2k-aging",
+      "query": "aging",
+      "system": "Twilight 2000 (4E)",
+      "key_facts": ["roll a D6 for age each term", "roll a D8 for age effects", "a D8 lower than your number of terms means you decrease an attribute"],
+      "source": "Twilight 2000 4E core, ch.2 (indexed library); encoded in lorehound/chargen/t2k.py",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false,
+      "notes": "Aging lives only in the chapter's worked example (no Aging rules section). Query + facts use the realistic Discord keyword and the example's own wording: BM25 (no semantic search, per the free/local constraint) needs shared keywords, so a verbose NL paraphrase doesn't retrieve it even though `/rule aging` does."
+    },
+    {
+      "id": "t2k-war-breaks-out",
+      "system": "Twilight 2000 (4E)",
+      "query": "When does World War III break out during character creation?",
+      "key_facts": ["from the second term on, roll a D8 for the war each term", "if the roll comes up under your number of terms served, the war breaks out", "the war ends your career terms (you take the At War term)"],
+      "source": "Twilight 2000 4E core, ch.2 (indexed library); encoded in lorehound/chargen/t2k.py",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false,
+      "notes": "Like aging, the war-break-out check appears only in the worked example."
+    },
+    {
+      "id": "t2k-encumbrance",
+      "system": "Twilight 2000 (4E)",
+      "query": "How does encumbrance work?",
+      "key_facts": ["gear weight is measured in encumbrance units", "one unit is roughly 3kg / an item carried in one hand", "an assault rifle is about one unit", "smaller items weigh half or a quarter of a unit"],
+      "source": "Twilight 2000 4E core, ch.2 (indexed library)",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false,
+      "notes": "Facts read from the indexed core-book prose."
+    },
+    {
+      "id": "t2k-radiation",
+      "system": "Twilight 2000 (4E)",
+      "query": "How does radiation work?",
+      "key_facts": ["you accumulate rad points on your character sheet", "radiation hotspots give rads over time", "weak radiation is 1 rad per shift"],
+      "source": "Twilight 2000 4E core, ch.2 (indexed library)",
+      "source_tier": "repo-mechanics",
+      "edition_sensitive": false,
+      "notes": "Facts read from the indexed core-book prose."
     }
   ]
 }
