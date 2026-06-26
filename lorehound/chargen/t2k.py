@@ -38,17 +38,19 @@ ATTR_INCREASE_DICE = "2d3"   # number of one-step attribute increases to distrib
 CUF_START = "D"              # Coolness Under Fire starts at D
 # Per-term skill handling is still simplified (see _FIDELITY_NOTE):
 SKILLS_PER_TERM = 2          # one-step skill raises granted each term
-MAX_TERMS = 4                # career terms before the mandatory "At War" term
 RANGED_COMBAT = "Ranged Combat"  # first term must train this (T2K life-path rule)
 STARTING_AGE = 18            # characters begin the life path at 18 (core book)
-AGE_DICE = "1d6"             # years added per term (approx — see _FIDELITY_NOTE)
+AGE_DICE = "1d6"             # years added per term
+AGE_EFFECT_DICE = "1d8"      # each term (from the 2nd): D8 under #terms → lose a step
+WAR_DICE = "1d8"             # each term (from the 2nd): D8 under #terms → WWIII begins
+TERM_HARD_CAP = 10           # safety bound; the war check almost always ends it sooner
 
 _FIDELITY_NOTE = (
-    "Attributes, childhood, and the per-term specialty check follow the "
+    "Attributes, childhood, the specialty check, and aging follow the "
     "rules-as-written (C baseline, 2D3 increases, CUF D; childhood class grants a "
-    "skill; 6+ skill roll earns a specialty). Age is tracked (~1D6/term from 18) but "
-    "the aging attribute-loss effects aren't modelled, and per-term skill gains are "
-    "slightly simplified — confirm those against your table."
+    "skill; 6+ skill roll earns a specialty; D6/term aging with the D8-vs-terms age "
+    "effect and war trigger). Per-term skill gains are slightly simplified and the "
+    "Archetype method isn't built — confirm those against your table."
 )
 
 
@@ -61,8 +63,21 @@ def _step_up(rating: str, ladder: list[str]) -> str:
     return ladder[min(i + 1, len(ladder) - 1)]
 
 
+def _step_down(rating: str, ladder: list[str]) -> str:
+    """One step down the ladder toward the floor (D for attributes)."""
+    try:
+        i = ladder.index(rating)
+    except ValueError:
+        i = len(ladder) - 1
+    return ladder[max(i - 1, 0)]
+
+
 def _at_max(rating: str, ladder: list[str]) -> bool:
     return rating == ladder[-1]
+
+
+def _at_min(rating: str, ladder: list[str]) -> bool:
+    return rating == ladder[0]
 
 
 def t2k_flow(ctx):  # -> Flow (generator)
@@ -143,8 +158,15 @@ def _bump_skill(known: dict[str, str], skill: str, ctx) -> None:
 
 
 def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
+    """Serve career terms until WWIII breaks out — a D8 'war' check that grows likelier
+    each term (it triggers when the roll comes up under the number of terms served), or
+    a safety cap is hit. Each term grants skills + a specialty roll, ages the character
+    (D6), and — from the 2nd term — risks an age effect (a D8 check on the same
+    rising threshold that drops one attribute a step)."""
     age = STARTING_AGE
-    for term in range(1, MAX_TERMS + 1):
+    term = 0
+    while term < TERM_HARD_CAP:
+        term += 1
         options = [
             Option(c.name, c.name, (c.rank or "civilian") + (f" · {c.requirements}" if c.requirements else ""))
             for c in data.careers
@@ -183,21 +205,49 @@ def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
         draft.gear = list(career.gear)  # most recent posting determines starting gear
         draft.career_history.append(career.name + (f" ({spec_name})" if spec_name else ""))
 
-        age_roll = yield Step(
+        age += (yield Step(
             f"age_{term}", StepKind.ROLL, f"Term {term}: years served",
-            roll_spec=AGE_DICE, detail="Each term ages your character.",
-        )
-        age += age_roll.total or 0
+            roll_spec=AGE_DICE, detail="Each term ages your character (D6).",
+        )).total or 0
         draft.notes["Age"] = str(age)
+        draft.notes["Terms served"] = str(term)
 
-        if term < MAX_TERMS:
-            cont = yield Step(
-                f"more_{term}", StepKind.CHOICE, "Serve another term?",
-                options=[Option("yes", "Yes — serve again"), Option("no", "No — the war is here")],
-                essential=True,
-            )
-            if cont.value == "no":
-                break
+        if term == 1:
+            continue  # the first term carries no age-effect or war risk
+
+        yield from _age_effect(ctx, draft, term)
+
+        war = yield Step(
+            f"war_{term}", StepKind.ROLL, f"Term {term}: does WWIII break out?",
+            roll_spec=WAR_DICE, detail=f"A D8 under {term} (your terms served) means war begins now.",
+        )
+        if (war.total or 0) < term:
+            ctx.log(f"WWIII breaks out after {term} terms.")
+            break
+
+
+def _age_effect(ctx, draft, term: int):
+    """From the 2nd term on, roll a D8: if it comes up under the number of terms
+    served, age catches up and one attribute drops a step (player's choice; the bot
+    picks in quick mode)."""
+    roll = yield Step(
+        f"age_effect_{term}", StepKind.ROLL, f"Term {term}: age effects",
+        roll_spec=AGE_EFFECT_DICE, detail=f"A D8 under {term} (your terms served) costs an attribute step.",
+    )
+    if (roll.total or 0) >= term:
+        return
+    options = [
+        Option(a, f"Lower {a}: {draft.attributes[a]} → {_step_down(draft.attributes[a], _ATTR_LADDER)}")
+        for a in ATTRIBUTES if not _at_min(draft.attributes[a], _ATTR_LADDER)
+    ]
+    if not options:
+        return
+    drop = yield Step(
+        f"age_drop_{term}", StepKind.CHOICE, "Age catches up — lower one attribute",
+        options=options,
+    )
+    draft.attributes[drop.value] = _step_down(draft.attributes[drop.value], _ATTR_LADDER)
+    ctx.log(f"Age effect: {drop.value} → {draft.attributes[drop.value]}")
 
 
 def _term_specialty(ctx, draft, career, known: dict[str, str], term: int):

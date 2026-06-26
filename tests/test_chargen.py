@@ -276,15 +276,17 @@ class TestT2KFlow(unittest.TestCase):
         from lorehound.chargen.t2k import t2k_flow
 
         rng = random.Random(5)
-        # Force the 2D3 attribute-increase roll to 4 (the only ROLL in the flow).
+        # Force the 2D3 attribute-increase roll to 4 (the only ROLL before careers).
         s = ChargenSession(
             t2k_flow, mode=QUICK, draft=CharacterDraft(game="Twilight: 2000"),
             data=self._data(),
             roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=4),
             rng=rng,
         )
-        for _ in range(500):
-            if s.current is None:
+        # Resolve only the attribute steps; stop once career terms begin (aging there
+        # can later lower an attribute, which is a separate mechanic).
+        for _ in range(50):
+            if s.current is None or s.current.id.startswith("career"):
                 break
             opts = s.current.options
             s.resolve(rng.choice(opts).value if opts else None)
@@ -339,6 +341,13 @@ class TestT2KFlow(unittest.TestCase):
         self.assertGreaterEqual(age, 18)              # starts at 18
         if s.draft.career_history:
             self.assertGreater(age, 18)               # each served term ages you
+
+    def test_war_ends_loop_and_age_effect_fires(self):
+        # Every D8 comes up 1: term 2's age-effect (1 < 2 terms) drops an attribute
+        # and the war check (1 < 2) ends the career loop after two terms.
+        s = self._drive_with_roll(1)
+        self.assertEqual(s.notes["Terms served"], "2")
+        self.assertTrue(any("Age effect" in line for line in s.log))
 
 
 class TestT2KProse(unittest.TestCase):
