@@ -458,6 +458,23 @@ class TestIndexingStatus(unittest.TestCase):
             svc.refresh()
         self.assertFalse(svc.indexing)         # cleared even on failure
 
+    def test_concurrent_refresh_is_rejected(self):
+        from lorehound.rules import ReindexInProgress
+
+        svc = self._service()
+        # Simulate a refresh already in flight by holding the lock, then a second
+        # refresh must bail out instead of starting a duplicate Drive pull.
+        self.assertTrue(svc._refresh_lock.acquire(blocking=False))
+        try:
+            with self.assertRaises(ReindexInProgress):
+                svc.refresh()
+            self.assertFalse(svc.indexing)     # the rejected call never set the flag
+        finally:
+            svc._refresh_lock.release()
+        # Once the in-flight refresh releases, a fresh refresh works again.
+        svc.refresh()
+        self.assertTrue(svc.ready)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from .. import ui
-from ..rules import RulesService, table_topic
+from ..rules import ReindexInProgress, RulesService, table_topic
 from ..search_index import Chunk, SearchHit, tokenize
 from ..tables import _name_col, render_item, render_table
 from ..text_utils import clean_grid
@@ -777,10 +777,26 @@ class RulesCog(commands.Cog):
         if self.rules.drive is None:
             await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
             return
+        # Common case: a reindex (or the startup warm) is already running. Reject up
+        # front so we don't kick off a duplicate Drive pull + re-extraction.
+        if self.rules.indexing:
+            await interaction.response.send_message(
+                "⏳ A reindex is already running — give it a moment and try again.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
             summary = await asyncio.to_thread(self.rules.refresh, force)
+        except ReindexInProgress:
+            # Lost a race against another refresh that started between the check above
+            # and the thread acquiring the lock.
+            await interaction.followup.send(
+                "⏳ A reindex is already running — give it a moment and try again.",
+                ephemeral=True,
+            )
+            return
         except Exception as exc:  # noqa: BLE001 - surface the error to the user
             await interaction.followup.send(f"⚠️ Reindex failed: {exc}", ephemeral=True)
             return
