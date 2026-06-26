@@ -100,13 +100,13 @@
     },
     {
       "id": "t2k-aging",
+      "query": "aging",
       "system": "Twilight 2000 (4E)",
-      "query": "What happens to my character as they get older during character creation?",
-      "key_facts": ["each career term ages you (roll a D6 for the years that pass)", "from the second term on, roll a D8 for age effects", "if the D8 comes up under your number of terms served, one attribute drops a step"],
+      "key_facts": ["roll a D6 for age each term", "roll a D8 for age effects", "a D8 lower than your number of terms means you decrease an attribute"],
       "source": "Twilight 2000 4E core, ch.2 (indexed library); encoded in lorehound/chargen/t2k.py",
       "source_tier": "repo-mechanics",
       "edition_sensitive": false,
-      "notes": "Aging lives only in the chapter's worked example (no Aging rules section) — a retrieval target for the overhaul."
+      "notes": "Aging lives only in the chapter's worked example (no Aging rules section). Query + facts use the realistic Discord keyword and the example's own wording: BM25 (no semantic search, per the free/local constraint) needs shared keywords, so a verbose NL paraphrase doesn't retrieve it even though `/rule aging` does."
     },
     {
       "id": "t2k-war-breaks-out",
