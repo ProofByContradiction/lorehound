@@ -10,10 +10,20 @@ it as "rules" (character abilities/procedures) vs "stuff" (gear & vehicles).
 from __future__ import annotations
 
 import re
+import threading
 
 from .careers import Career, assemble_career, detect_careers
 from .drive_client import DriveClient
 from .search_index import Chunk, SearchHit, SearchIndex
+
+
+class ReindexInProgress(RuntimeError):
+    """Raised when refresh() is called while another refresh is already running.
+
+    refresh() runs in a worker thread from two places (the startup warm and the
+    operator's /reindex). A second concurrent call would duplicate the Drive pull
+    and PDF extraction and clear the ``indexing`` flag out from under the first, so
+    it's rejected rather than allowed to race."""
 
 _PAGE_MARKER = re.compile(r"\[\[page (\d+)\]\]")
 _MD_HEADER = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -543,6 +553,9 @@ class RulesService:
         # warn that data may change shortly and gate flows (chargen) that want a
         # stable snapshot. See ``ready`` / ``indexing``.
         self._indexing = False
+        # Held for the duration of a refresh so concurrent calls (startup warm vs
+        # /reindex, or a double-fired /reindex) are rejected, not run in parallel.
+        self._refresh_lock = threading.Lock()
 
     @property
     def ready(self) -> bool:
@@ -569,6 +582,10 @@ class RulesService:
             raise RuntimeError("Google Drive is not configured.")
         from .chargen.registry import chargen_for
 
+        # Re-entry guard: a non-blocking acquire fails if a refresh is already in
+        # flight, so the duplicate is rejected instead of racing the live one.
+        if not self._refresh_lock.acquire(blocking=False):
+            raise ReindexInProgress("A reindex is already in progress.")
         self._indexing = True
         try:
             docs = self.drive.fetch_all(force=force)
@@ -603,6 +620,7 @@ class RulesService:
             }
         finally:
             self._indexing = False
+            self._refresh_lock.release()
 
     def catalog_names(self, game: str, category: str) -> list[str]:
         """Sorted item names for a game's weapon/vehicle catalogs (autocomplete)."""
