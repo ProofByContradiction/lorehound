@@ -22,10 +22,11 @@ from lorehound.search_index import Chunk, SearchIndex
 from scripts.retrieval_eval import _norm, fact_present, resolve_game
 
 # In-suite regression floor for the live gold eval. After the retrieval overhaul
-# (stemming + worked-example rescue) gate fact-recall is ~0.58 (2026-06-26, top-8);
-# this floor sits well below that so the test fails only on a genuine regression,
-# not routine tuning noise.
-_REGRESSION_FLOOR = 0.45
+# (stemming + worked-example rescue) and calibrating the gold set to realistic
+# keyword queries + book-aligned facts, gate fact-recall is ~0.83 (2026-06-26,
+# top-8). This floor sits below that with headroom for newly-added (initially
+# failing) targets, so the test fails only on a genuine regression.
+_REGRESSION_FLOOR = 0.60
 
 
 def _toks(s: str) -> set:
