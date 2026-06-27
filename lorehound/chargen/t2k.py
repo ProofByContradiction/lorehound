@@ -52,8 +52,16 @@ _FIDELITY_NOTE = (
     "earns a specialty AND a promotion — stepping your nationality's rank ladder and raising "
     "CUF a step; aging uses D6/term with the D8-vs-terms age effect and war trigger. "
     "Approximations: the advancement roll uses your best die (the skill→attribute pairing "
-    "isn't in our data), and the Archetype (quick-build) method isn't built — confirm those "
-    "against your table."
+    "isn't in our data) — confirm that against your table."
+)
+
+_ARCHETYPE_NOTE = (
+    "Built rules-as-written from the archetype quick-build: attributes start at C with "
+    "three increases (drop one to D for a fourth), your key attribute flagged; one B-level "
+    "skill from the archetype's list, then two C and three D chosen freely; one of the "
+    "archetype's specialties; Coolness Under Fire per the archetype. Approximations: "
+    "branch, starting rank, and the archetype's recommended gear aren't modeled — add "
+    "those from your table."
 )
 
 
@@ -86,12 +94,32 @@ def _at_min(rating: str, ladder: list[str]) -> bool:
 def t2k_flow(ctx):  # -> Flow (generator)
     data: T2KData = ctx.data  # type: ignore[assignment]
     draft = ctx.draft
-    draft.method = "Life Path"
     if not isinstance(data, T2KData) or not data.has_careers:
         ctx.log("No T2K career data is indexed — cannot build a character.")
         draft.notes["Note"] = "The T2K library has no career data indexed yet."
         return
 
+    # T2K offers two creation methods (Archetypes vs Life Paths). Offer the choice only
+    # when archetype templates are indexed; otherwise go straight to the life path.
+    if data.has_archetypes:
+        method = yield Step(
+            "method", StepKind.CHOICE, "Character creation method",
+            options=[
+                Option("archetype", "Archetype — quick build",
+                       "Pick a ready-made template and fill in a few choices."),
+                Option("lifepath", "Life Path — detailed",
+                       "Build term by term through a career history."),
+            ],
+            essential=True,
+        )
+        if method.value == "archetype":
+            yield from _archetype_flow(ctx, data, draft)
+            return
+    yield from _life_path_flow(ctx, data, draft)
+
+
+def _life_path_flow(ctx, data: T2KData, draft):
+    draft.method = "Life Path"
     nationality = yield from _nationality(ctx, draft)  # T2K step 1: languages + rank ladder
     yield from _attributes(ctx, data, draft)
     known: dict[str, str] = {}            # trained skill -> rating (untrained omitted)
@@ -105,6 +133,106 @@ def t2k_flow(ctx):  # -> Flow (generator)
     draft.notes["Reminder"] = "Define a moral code and a 'buddy' (a key relationship) with your group."
     draft.notes.setdefault("Permanent rads", "0")
     draft.notes["Note"] = _FIDELITY_NOTE
+
+
+def _archetype_flow(ctx, data: T2KData, draft):
+    """The Archetype 'quick build' (T2K p20): pick a template, set attributes (C
+    baseline + three increases, +1 if you drop one to D), take a B skill from the
+    archetype's list plus two C and three D chosen freely, and one of the archetype's
+    specialties. Key attribute, skills and specialties come from the indexed archetype
+    cards (see the archetype reconstructor)."""
+    draft.method = "Archetype"
+    pick = yield Step(
+        "archetype", StepKind.CHOICE, "Choose your archetype",
+        options=[
+            Option(a["name"], a["name"], "Key: " + a.get("key_attribute", "?")
+                   + " · " + ", ".join(a.get("key_skills", [])))
+            for a in data.archetypes
+        ],
+        essential=True,
+    )
+    arch = next((a for a in data.archetypes if a["name"] == pick.value), data.archetypes[0])
+    draft.notes["Archetype"] = arch["name"]
+
+    yield from _nationality(ctx, draft)
+    yield from _archetype_attributes(ctx, draft, arch)
+    known: dict[str, str] = {}
+    yield from _archetype_skills(ctx, data, draft, arch, known)
+
+    specs = arch.get("specialties", [])
+    if specs:
+        sp = yield Step(
+            "archetype_spec", StepKind.CHOICE, "Choose your starting specialty",
+            options=[Option(s, s) for s in specs], essential=True,
+        )
+        if sp.value and sp.value not in draft.specialties:
+            draft.specialties.append(sp.value)
+
+    if arch.get("cuf"):
+        draft.derived["Coolness Under Fire"] = arch["cuf"]
+    draft.skills = dict(sorted(known.items()))
+    _finalize_derived(draft)
+    draft.notes["Reminder"] = "Define a moral code and a 'buddy' (a key relationship) with your group."
+    draft.notes.setdefault("Permanent rads", "0")
+    draft.notes["Note"] = _ARCHETYPE_NOTE
+
+
+def _archetype_attributes(ctx, draft, arch):
+    """C baseline; three increases up to A, plus one more if you drop an attribute to D.
+    The archetype's key attribute is flagged but you may raise any."""
+    for a in ATTRIBUTES:
+        draft.attributes[a] = BASELINE_ATTR
+    draft.derived["Coolness Under Fire"] = CUF_START
+    key = arch.get("key_attribute", "")
+    drop = yield Step(
+        "archetype_attr_drop", StepKind.CHOICE,
+        "Drop one attribute to D for an extra increase? (optional)",
+        options=[Option("none", "Keep all four at C")]
+        + [Option(a, f"Drop {a} to D (+1 increase)") for a in ATTRIBUTES],
+    )
+    increases = 3
+    dropped = drop.value if drop.value in ATTRIBUTES else None
+    if dropped:
+        draft.attributes[dropped] = _step_down(BASELINE_ATTR, _ATTR_LADDER)
+        increases = 4
+        ctx.log(f"Dropped {dropped} to D for a 4th increase.")
+    for n in range(increases):
+        options = [
+            Option(a, f"Raise {a}: {draft.attributes[a]} → "
+                      f"{_step_up(draft.attributes[a], _ATTR_LADDER)}"
+                      + (" (key)" if a == key else ""))
+            for a in ATTRIBUTES
+            if a != dropped and not _at_max(draft.attributes[a], _ATTR_LADDER)
+        ]
+        if not options:
+            break
+        raise_ = yield Step(
+            f"archetype_attr_{n}", StepKind.CHOICE,
+            f"Attribute increase {n + 1} of {increases} (key: {key or 'any'})",
+            options=options,
+        )
+        draft.attributes[raise_.value] = _step_up(draft.attributes[raise_.value], _ATTR_LADDER)
+
+
+def _archetype_skills(ctx, data: T2KData, draft, arch, known: dict[str, str]):
+    """One B-level skill from the archetype's list, then two C and three D chosen
+    freely from the indexed skill vocabulary."""
+    b_opts = arch.get("key_skills", []) or data.all_skills()
+    b = yield Step(
+        "archetype_b_skill", StepKind.CHOICE, "Choose your B-level skill (from your archetype)",
+        options=[Option(s, s) for s in b_opts], essential=True,
+    )
+    known[b.value] = "B"
+    for tier, count in (("C", 2), ("D", 3)):
+        for i in range(count):
+            opts = [Option(s, s) for s in data.all_skills() if s not in known]
+            if not opts:
+                break
+            pick = yield Step(
+                f"archetype_{tier.lower()}_skill_{i}", StepKind.CHOICE,
+                f"Choose a {tier}-level skill ({i + 1} of {count})", options=opts,
+            )
+            known[pick.value] = tier
 
 
 def _attributes(ctx, data: T2KData, draft):

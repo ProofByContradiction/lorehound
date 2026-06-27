@@ -218,6 +218,25 @@ class T2KData:
     # ascending by level; {} if the ranks table wasn't indexed (promotions degrade to
     # recording the starting rank only).
     ranks: dict = field(default_factory=dict)
+    # Archetype "quick build" templates: [{name, key_attribute, key_skills, specialties,
+    # cuf}, …]; empty if not indexed (the flow then offers only the Life Path method).
+    archetypes: list[dict] = field(default_factory=list)
+
+    @property
+    def has_archetypes(self) -> bool:
+        return bool(self.archetypes)
+
+    def all_skills(self) -> list[str]:
+        """The skill vocabulary across the indexed data — careers, childhood, and
+        archetypes — for the archetype build's free C/D skill picks."""
+        skills: set[str] = set()
+        for c in self.careers:
+            skills.update(c.skills)
+        for _name, sk in self.childhood:
+            skills.update(sk)
+        for a in self.archetypes:
+            skills.update(a.get("key_skills", []))
+        return sorted(skills)
 
     def career(self, name: str) -> T2KCareer | None:
         nl = name.strip().lower()
@@ -291,4 +310,5 @@ def build_t2k_data(rules, game: str) -> T2KData:
         childhood=childhood,
         childhood_specialties=aux.get("childhood_specialties", {}),
         ranks=aux.get("ranks", {}),
+        archetypes=aux.get("archetypes", []),
     )

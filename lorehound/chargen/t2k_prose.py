@@ -102,6 +102,48 @@ def parse_childhood_specialties(text: str, tables: list | None) -> dict:
     return {}
 
 
+_ARCHETYPE_HEADING = re.compile(r"\[\[page (\d+)\]\]|####\s*(The [A-Z][A-Za-z]+)")
+
+
+def parse_archetypes(text: str, tables: list | None) -> list[dict]:
+    """``[{name, key_attribute, key_skills, specialties, cuf}, …]`` for the T2K
+    archetype "quick build" cards. The stat box is recovered by the archetype
+    reconstructor into a structured card (``title == "ARCHETYPE"``); the archetype's
+    name is a graphic the card can't carry, so we pair each card with the markdown
+    ``#### The …`` heading on the same page. ``[]`` if no archetype cards were indexed."""
+    cards = [
+        t for t in (tables or [])
+        if isinstance(t, dict) and any(
+            len(r) >= 2 and str(r[0]).strip().upper() == "KEY ATTRIBUTE"
+            for r in (t.get("rows") or [])
+        )
+    ]
+    if not cards:
+        return []
+    names: dict[int, str] = {}
+    page = None
+    for m in _ARCHETYPE_HEADING.finditer(text):
+        if m.group(1):
+            page = int(m.group(1))
+        elif m.group(2) and page is not None and page not in names:
+            names[page] = m.group(2).strip()
+    out: list[dict] = []
+    for c in cards:
+        rows = {str(r[0]).strip().upper(): str(r[1]).strip() for r in c["rows"] if len(r) >= 2}
+        name = names.get(c.get("page"))
+        attr = rows.get("KEY ATTRIBUTE", "")
+        if not name or not attr:
+            continue
+        out.append({
+            "name": name,
+            "key_attribute": attr,
+            "key_skills": [s.strip() for s in rows.get("KEY SKILLS", "").split(",") if s.strip()],
+            "specialties": [s.strip() for s in rows.get("SPECIALTIES", "").split(",") if s.strip()],
+            "cuf": rows.get("COOLNESS UNDER FIRE", ""),
+        })
+    return out
+
+
 # The Military Ranks table is a structured grid: a header row of nationality columns
 # then one row per rank level (ascending), "–" where a nationality has no equivalent.
 _RANK_COLUMNS = ("us", "soviet", "polish", "swedish")
@@ -133,6 +175,9 @@ def extract_t2k_prose(text: str, tables: list | None = None) -> dict:
     specs = parse_childhood_specialties(text, tables)
     if specs:
         out["childhood_specialties"] = specs
+    archetypes = parse_archetypes(text, tables)
+    if archetypes:
+        out["archetypes"] = archetypes
     ranks = parse_ranks(tables)
     if ranks:
         out["ranks"] = ranks
