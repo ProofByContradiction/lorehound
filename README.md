@@ -148,6 +148,22 @@ lorehound run        # foreground instead
 
 **Config/code changes take effect on `restart`.**
 
+### Re-indexing without a restart
+
+The bot watches its cache and hot-reloads when a standalone indexer run finishes, so
+**data/extraction changes don't need a bot restart** — only bot-*code* changes do:
+
+```bash
+python -m lorehound.index           # re-pull + re-extract changed files (and version bumps)
+python -m lorehound.index --force    # full re-extract (ignore the cache)
+```
+
+This writes the cache and stamps `cache/.reindex-manifest.json`; the running bot
+notices within ~30s and atomically swaps in the new index (queries keep working the
+whole time). The in-bot `/reindex` command does the same rebuild in-process — use the
+standalone indexer when you want to re-run *changed extraction code* against the
+library without restarting the bot. (Don't run both against the same cache at once.)
+
 ## How it works
 
 - **Extraction is cached; the index is rebuilt each start.** PDF→Markdown+tables

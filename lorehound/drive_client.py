@@ -78,6 +78,15 @@ _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}
 # Combined stamp for the "everything is current" fast path.
 EXTRACT_VERSION = f"{MD_VERSION}+{TABLE_VERSION}"
 
+# Marker file the standalone indexer (``python -m lorehound.index``) writes to the
+# cache dir when a full (re)extraction finishes. The running bot watches its mtime
+# and hot-reloads the index when it advances, so extraction/data changes go live
+# without a bot restart. Written last (after every cache file) so the bot only
+# reloads once everything is on disk. Deliberately NOT written by ``fetch_all`` /
+# ``/reindex`` — a bot-side refresh rebuilds in-process and needn't re-trigger
+# itself (and the leading dot keeps it out of the ``*.json`` cache glob).
+REINDEX_MANIFEST = ".reindex-manifest.json"
+
 
 @dataclass
 class DriveDoc:
@@ -477,6 +486,38 @@ class DriveClient:
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[drive] cache write failed for {file_id}: {exc}")
+
+    @property
+    def manifest_path(self) -> Path | None:
+        """Path to the reindex marker the standalone indexer stamps (None if this
+        client has no cache dir). The bot watches its mtime to hot-reload."""
+        return self.cache_dir / REINDEX_MANIFEST if self.cache_dir else None
+
+    def write_manifest(self, docs: list[DriveDoc]) -> Path | None:
+        """Stamp the cache as freshly (re)built, signalling the bot to hot-reload.
+
+        Called by ``python -m lorehound.index`` *after* ``fetch_all`` has written
+        every cache file, so the bot's watcher reloads only once the data is fully on
+        disk. Rewriting the file advances its mtime even when contents are unchanged,
+        which is the signal the watcher keys on; the body is informational."""
+        path = self.manifest_path
+        if not path:
+            return None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": EXTRACT_VERSION,
+                        "documents": len(docs),
+                        "files": sorted(d.name for d in docs),
+                    }
+                )
+            )
+        except OSError as exc:
+            print(f"[drive] manifest write failed: {exc}")
+            return None
+        return path
 
     def fetch_all(self, force: bool = False) -> list[DriveDoc]:
         """Download and extract text + tables from every supported file (cached).
