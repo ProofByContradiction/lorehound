@@ -71,7 +71,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 MD_VERSION = "pymupdf-md-styleheadings-v1"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
-TABLE_VERSION = "find-tables-lines-v12-archetype-cards"
+TABLE_VERSION = "find-tables-lines-v13-shaded-tables"
 # Caches written before the split-versioning scheme; their tables already match
 # TABLE_VERSION's logic, so we can reuse them without re-running detection.
 _LEGACY_TABLE_VERSIONS = {"pymupdf-md-v2-tables"}

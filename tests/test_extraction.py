@@ -15,8 +15,41 @@ Live gold:  LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_extraction
 import os
 import unittest
 
-from lorehound.pdf_tables import _recover_trailing_rows
+from lorehound.pdf_tables import _recover_trailing_rows, _shaded_table_regions
 from scripts.extraction_eval import _find_table, score_entry, summarize
+
+
+class _FakePage:
+    """Minimal stand-in exposing get_drawings() for the shaded-band region test."""
+
+    def __init__(self, rects):
+        self._rects = rects
+
+    def get_drawings(self):
+        return [{"fill": (0, 0, 0), "rect": r} for r in self._rects]
+
+
+class TestShadedTableRegions(unittest.TestCase):
+    """_shaded_table_regions clusters the filled row-bands (Paizo-style shading)
+    into table regions — the Stage-A ruling-independent detector's first stage."""
+
+    def _rect(self, x0, y0, x1, y1):
+        import fitz
+        return fitz.Rect(x0, y0, x1, y1)
+
+    def test_adjacent_wide_bands_form_one_region(self):
+        bands = [self._rect(70, 640 + 24 * i, 520, 652 + 24 * i) for i in range(3)]
+        regions = _shaded_table_regions(_FakePage(bands))
+        self.assertEqual(len(regions), 1)
+        self.assertLess(regions[0].y0, 640)   # padded up for a header row
+        self.assertGreater(regions[0].y1, 700)
+
+    def test_single_band_is_not_a_table(self):
+        self.assertEqual(_shaded_table_regions(_FakePage([self._rect(70, 640, 520, 652)])), [])
+
+    def test_narrow_bands_ignored(self):
+        narrow = [self._rect(70, 640, 120, 652), self._rect(70, 664, 120, 676)]
+        self.assertEqual(_shaded_table_regions(_FakePage(narrow)), [])
 
 # A faithful little table and a row-dropped copy of it (the D12-row failure mode).
 _GOOD = {"page": 48, "title": "Chance of Success", "rows": [
