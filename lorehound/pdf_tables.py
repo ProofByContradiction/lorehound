@@ -205,6 +205,9 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     # as a weapon via the 'ROF' substring.
     if hdr.startswith("CAREER") or has("LAST", "CAREER") or "SPECIALTY (D6)" in hdr:
         return "card"
+    # T2K archetype quick-build card (emitted by the archetype reconstructor).
+    if "KEY ATTRIBUTE" in hdr:
+        return "card"
     # Vehicle stat blocks BEFORE weapons: a vehicle table carries a MAIN WEAPON +
     # REL column, so it would otherwise be mis-read as a weapon catalogue.
     if has("VEHICLE") or "COMBAT SPEED" in hdr:
@@ -446,6 +449,41 @@ def _t2k_careers(page, page_no, existing) -> list[dict]:
     if _has_clean_career_card(existing):
         return []
     return _career_grids(page, page_no)
+
+
+# T2K archetype "quick build" stat box — styled text the markdown pass drops.
+_ARCH_ATTR = re.compile(r"KEY ATTRIBUTE:\s*([A-Z]{3})")
+_ARCH_SKILLS = re.compile(r"KEY SKILLS:\s*(.+?)\s*(?:✓|COOLNESS|KEY |\t)", re.S)
+_ARCH_CUF = re.compile(r"COOLNESS UNDER FIRE:\s*([A-D])")
+_ARCH_SPECS = re.compile(r"SPECIALTIES\b.*?\n(.*?)(?:YOUR MORAL|MORAL CODE|YOUR BIG|GEAR)", re.S)
+_ARCH_BULLET = re.compile(r"[7✓]\s*([A-Z][A-Za-z /()'’-]+)")
+
+
+def _t2k_archetypes(page, page_no, existing) -> list[dict]:
+    """T2K archetype reconstructor: each archetype page carries a styled stat box
+    (KEY ATTRIBUTE / KEY SKILLS / recommended SPECIALTIES) that the markdown pass
+    drops, so the chargen archetype flow has nothing to read. Recover it from the
+    page's raw text and emit one structured card per archetype page; ``[]`` elsewhere.
+    The archetype *name* is a graphic, so it isn't here — the prose parser pairs this
+    card with the markdown ``#### The …`` heading on the same page."""
+    raw = page.get_text()
+    attr = _ARCH_ATTR.search(raw)
+    skills = _ARCH_SKILLS.search(raw)
+    if not attr or not skills:
+        return []
+    skill_list = [s.strip() for s in re.sub(r"\s+", " ", skills.group(1)).split(",") if s.strip()]
+    if len(skill_list) < 2:
+        return []
+    rows = [["KEY ATTRIBUTE", attr.group(1)], ["KEY SKILLS", ", ".join(skill_list)]]
+    cuf = _ARCH_CUF.search(raw)
+    if cuf:
+        rows.append(["COOLNESS UNDER FIRE", cuf.group(1)])
+    sp = _ARCH_SPECS.search(raw)
+    if sp:
+        specs = [s.strip() for s in _ARCH_BULLET.findall(sp.group(1))][:6]
+        if specs:
+            rows.append(["SPECIALTIES", ", ".join(specs)])
+    return [{"page": page_no, "title": "ARCHETYPE", "rows": rows}]
 
 
 # Career-page section markers — a Mongoose Traveller career spread carries these.
@@ -978,7 +1016,7 @@ sources.register(
     sources.SourceProfile(
         name="Twilight 2000 (4E)",
         games=("twilight", "t2k", "2000"),
-        reconstructors=[_t2k_careers],
+        reconstructors=[_t2k_careers, _t2k_archetypes],
     )
 )
 sources.register(

@@ -340,6 +340,54 @@ class TestT2KFlow(unittest.TestCase):
             s.resolve(rng.choice(opts).value if opts else None)
         self.assertIn("Runner", s.draft.specialties)
 
+    def test_archetype_quick_build(self):
+        # The Archetype method: a B skill from the archetype's list + two C + three D,
+        # one of the archetype's specialties, CUF from the archetype.
+        from collections import Counter
+
+        from lorehound.chargen.data import T2KCareer, T2KData
+        from lorehound.chargen.engine import FAITHFUL, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+        combat = T2KCareer(
+            name="Combat Arms", rank="Private",
+            skills=["Ranged Combat", "Recon", "Close Combat", "Survival", "Tech",
+                    "Mobility", "Driving", "Command"],
+            specialties=[("1", "Rifleman")], gear=["Rifle"],
+        )
+        arch = [{"name": "The Medic", "key_attribute": "EMP", "cuf": "C",
+                 "key_skills": ["Stamina", "Medical Aid", "Persuasion"],
+                 "specialties": ["Combat Medic", "Field Surgeon"]}]
+        data = T2KData(game="Twilight: 2000", careers=[combat], archetypes=arch)
+        rng = random.Random(7)
+        s = ChargenSession(t2k_flow, mode=FAITHFUL,
+                           draft=CharacterDraft(game="Twilight: 2000"), data=data, rng=rng)
+        for _ in range(200):
+            if s.current is None:
+                break
+            if s.current.id == "method":
+                s.resolve("archetype")
+                continue
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        d = s.draft
+        self.assertTrue(s.complete)
+        self.assertEqual(d.method, "Archetype")
+        self.assertEqual(d.notes.get("Archetype"), "The Medic")
+        counts = Counter(d.skills.values())
+        self.assertEqual((counts["B"], counts["C"], counts["D"]), (1, 2, 3))
+        b_skill = next(k for k, v in d.skills.items() if v == "B")
+        self.assertIn(b_skill, ["Stamina", "Medical Aid", "Persuasion"])  # from the archetype
+        self.assertTrue(set(d.specialties) & {"Combat Medic", "Field Surgeon"})
+        self.assertEqual(d.derived.get("Coolness Under Fire"), "C")
+        self.assertTrue(all(v in ("A", "B", "C", "D") for v in d.attributes.values()))
+
+    def test_no_archetypes_skips_method_choice(self):
+        # Without indexed archetypes, the flow goes straight to the Life Path method.
+        from lorehound.chargen.engine import QUICK
+        s, _ = self._drive(QUICK, self._data())
+        self.assertEqual(s.draft.method, "Life Path")
+
     def test_childhood_specialty_falls_back_to_choice_when_roll_missing(self):
         # D6=1 isn't in the data (extraction gap) → the flow must still grant one,
         # chosen from the background's available specialties.
@@ -641,6 +689,28 @@ class TestT2KProse(unittest.TestCase):
         from lorehound.chargen.t2k_prose import extract_t2k_prose, parse_childhood
         self.assertEqual(parse_childhood("no childhood here"), [])
         self.assertEqual(extract_t2k_prose("nothing relevant"), {})
+
+    def test_parse_archetypes_pairs_card_with_markdown_name(self):
+        # The stat box is a reconstructed card (title ARCHETYPE); the name comes from
+        # the markdown "#### The …" heading on the same page.
+        from lorehound.chargen.t2k_prose import parse_archetypes
+        text = "[[page 25]]\n#### The Grunt\nflavor text\n[[page 26]]\n#### The Gunner\n"
+        tables = [
+            {"page": 25, "title": "ARCHETYPE", "rows": [
+                ["KEY ATTRIBUTE", "STR"],
+                ["KEY SKILLS", "Close Combat, Stamina, Ranged Combat"],
+                ["COOLNESS UNDER FIRE", "C"],
+                ["SPECIALTIES", "Load Carrier, Ranger, Rifleman"],
+            ]},
+        ]
+        got = parse_archetypes(text, tables)
+        self.assertEqual(len(got), 1)
+        a = got[0]
+        self.assertEqual(a["name"], "The Grunt")
+        self.assertEqual(a["key_attribute"], "STR")
+        self.assertEqual(a["key_skills"], ["Close Combat", "Stamina", "Ranged Combat"])
+        self.assertEqual(a["specialties"], ["Load Carrier", "Ranger", "Rifleman"])
+        self.assertEqual(a["cuf"], "C")
 
 
 class TestRegistration(unittest.TestCase):
