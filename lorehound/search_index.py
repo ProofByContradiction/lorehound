@@ -82,8 +82,12 @@ class SearchIndex:
     B = 0.75
     # Extra weight for query terms found in a chunk's heading breadcrumb (e.g. the
     # specialty / gear / skill name), so the defining entry ranks above passing
-    # mentions of the same word elsewhere.
-    HEADING_BOOST = 2.0
+    # mentions of the same word elsewhere. Kept moderate: at 2.0 it over-weighted
+    # breadcrumb matches and crowded fact-bearing body chunks out of the top-k, so
+    # granular facts missed the window. Lowering to 1.0 lifted gold fact-recall
+    # 0.83→0.88 (war + encumbrance facts back into top-8) with no ranking regressions
+    # — tuned on scripts/retrieval_eval.py; the defining entry still ranks first.
+    HEADING_BOOST = 1.0
     # Once there's a clear top hit, drop results scoring below this fraction of it
     # — far-weaker matches are passing mentions, not rules about the query.
     REL_CUTOFF = 0.40
