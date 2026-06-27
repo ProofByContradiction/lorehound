@@ -349,6 +349,216 @@ class TestT2KFlow(unittest.TestCase):
         self.assertEqual(s.notes["Terms served"], "2")
         self.assertTrue(any("Age effect" in line for line in s.log))
 
+    def test_two_skill_picks_in_a_term_are_distinct(self):
+        from lorehound.chargen.data import T2KCareer, T2KData
+        from lorehound.chargen.engine import FAITHFUL, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+
+        career = T2KCareer(name="Scavenger", skills=["Alpha", "Beta", "Gamma"],
+                           specialties=[("1", "Spec")])
+        data = T2KData(game="Twilight: 2000", careers=[career])
+        rng = random.Random(1)
+        s = ChargenSession(t2k_flow, mode=FAITHFUL,
+                           draft=CharacterDraft(game="Twilight: 2000"), data=data, rng=rng)
+        first, checked = None, False
+        for _ in range(500):
+            if s.current is None:
+                break
+            cur = s.current
+            if cur.id == "skill_1_0":
+                first = cur.options[0].value
+                s.resolve(first)
+                continue
+            if cur.id == "skill_1_1":
+                self.assertNotIn(first, [o.value for o in cur.options])  # can't re-pick
+                checked = True
+                s.resolve(cur.options[0].value)
+                continue
+            s.resolve(rng.choice(cur.options).value if cur.options else None)
+        self.assertTrue(checked, "never reached the second skill pick of term 1")
+
+    def test_advancement_promotes_rank_and_raises_cuf(self):
+        from lorehound.chargen.data import T2KCareer, T2KData
+        from lorehound.chargen.engine import FAITHFUL, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+
+        ranks = {"columns": ["us", "soviet", "polish", "swedish"], "rows": [
+            ["Private", "Ryadovoy", "Szeregowy", "Menig"],
+            ["Private First Class", "–", "Starszy szeregowy", "–"],
+            ["Corporal", "Efreitor", "Kapral", "Korpral"],
+            ["Sergeant", "Mladshiy", "Plutonowy", "Furir"],
+        ]}
+        career = T2KCareer(name="Combat Arms", rank="Private", skills=["Ranged Combat", "Recon"],
+                           specialties=[("1", "Rifleman"), ("2", "Tanker"), ("3", "Sniper")])
+        data = T2KData(game="Twilight: 2000", careers=[career], ranks=ranks)
+        rng = random.Random(0)
+        s = ChargenSession(
+            t2k_flow, mode=FAITHFUL, draft=CharacterDraft(game="Twilight: 2000"), data=data,
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=6), rng=rng,
+        )
+        for _ in range(800):
+            if s.current is None:
+                break
+            if s.current.id == "nationality":
+                s.resolve("us")
+                continue
+            opts = s.current.options
+            s.resolve(opts[0].value if opts else None)
+        d = s.draft
+        # Every advancement roll succeeds → promotions climb the ladder and lift CUF off D.
+        self.assertEqual(d.rank, "Sergeant")                  # capped at the ladder top
+        self.assertEqual(d.derived["Coolness Under Fire"], "A")
+        self.assertTrue(any("Promoted to" in line for line in d.log))
+
+    def test_specialties_never_duplicate(self):
+        d = self._drive_with_roll(12)        # always succeeds → grabs specialties every term
+        self.assertEqual(len(d.specialties), len(set(d.specialties)))
+
+    def test_ineligible_career_is_not_offered(self):
+        from lorehound.chargen.data import T2KCareer, T2KData
+        from lorehound.chargen.engine import QUICK, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+
+        locked = T2KCareer(name="Locked", requirements="at least one term in Ghost Unit",
+                           skills=["Alpha"], specialties=[("1", "S")])
+        openc = T2KCareer(name="Open", requirements="None", skills=["Beta"], specialties=[("1", "S")])
+        data = T2KData(game="Twilight: 2000", careers=[locked, openc])
+        rng = random.Random(0)
+        s = ChargenSession(t2k_flow, mode=QUICK,
+                           draft=CharacterDraft(game="Twilight: 2000"), data=data, rng=rng)
+        seen = False
+        for _ in range(200):
+            if s.current is None:
+                break
+            if s.current.id == "career_1":
+                values = [o.value for o in s.current.options]
+                self.assertIn("Open", values)
+                self.assertNotIn("Locked", values)   # needs a prior term it can't have yet
+                seen = True
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        self.assertTrue(seen)
+
+
+class TestRequirementEnforcement(unittest.TestCase):
+    """Parsing freeform requirement text into enforceable predicates."""
+
+    def _data(self, careers):
+        from lorehound.chargen.data import T2KData
+        return T2KData(game="Twilight: 2000", careers=careers)
+
+    def _career(self, req):
+        from lorehound.chargen.data import T2KCareer
+        return T2KCareer(name="X", requirements=req, skills=["Skill"])
+
+    def _eligible(self, req, attrs, history):
+        data = self._data([self._career(req)])
+        return data.eligibility(data.career("X"), attrs, history)
+
+    ALL_C = {"STR": "C", "AGL": "C", "INT": "C", "EMP": "C"}
+
+    def test_blank_requirements_always_eligible(self):
+        for blank in ("", "None", "–"):
+            self.assertTrue(self._eligible(blank, self.ALL_C, [])[0])
+
+    def test_attribute_threshold_and_or(self):
+        self.assertFalse(self._eligible("STR and AGL B+", self.ALL_C, [])[0])
+        self.assertTrue(self._eligible("STR and AGL B+", {**self.ALL_C, "STR": "B", "AGL": "B"}, [])[0])
+        # OR only needs one of the two.
+        self.assertTrue(self._eligible("STR or AGL B+", {**self.ALL_C, "AGL": "A"}, [])[0])
+        self.assertFalse(self._eligible("STR or AGL B+", self.ALL_C, [])[0])
+
+    def test_no_d_attribute(self):
+        self.assertTrue(self._eligible("no D attribute", self.ALL_C, [])[0])
+        self.assertFalse(self._eligible("no D attribute", {**self.ALL_C, "EMP": "D"}, [])[0])
+
+    def test_specific_attribute_levels(self):
+        self.assertTrue(self._eligible("EMP C or D", {**self.ALL_C, "EMP": "D"}, [])[0])
+        self.assertFalse(self._eligible("EMP C or D", {**self.ALL_C, "EMP": "B"}, [])[0])
+
+    def test_history_term_prerequisite(self):
+        self.assertFalse(self._eligible("at least one term in Combat Arms", self.ALL_C, [])[0])
+        self.assertTrue(self._eligible("at least one term in Combat Arms", self.ALL_C,
+                                       ["Combat Arms (Rifleman)"])[0])
+
+    def test_no_terms_in_prerequisite(self):
+        self.assertTrue(self._eligible("no terms in prison", self.ALL_C, ["Farmer"])[0])
+        self.assertFalse(self._eligible("no terms in prison", self.ALL_C, ["Prisoner"])[0])
+
+    def test_military_and_education_categories(self):
+        from lorehound.chargen.data import T2KCareer
+        marine = T2KCareer(name="Combat Arms", rank="Private", skills=["Ranged Combat"])
+        sciences = T2KCareer(name="Sciences", skills=["Tech"])
+        needs_mil = T2KCareer(name="Vet", requirements="one or more terms in the military", skills=["S"])
+        needs_edu = T2KCareer(name="Agent", requirements="at least one term in Education", skills=["S"])
+        data = self._data([marine, sciences, needs_mil, needs_edu])
+        self.assertFalse(data.eligibility(needs_mil, self.ALL_C, ["Sciences"])[0])
+        self.assertTrue(data.eligibility(needs_mil, self.ALL_C, ["Combat Arms"])[0])
+        self.assertFalse(data.eligibility(needs_edu, self.ALL_C, ["Combat Arms"])[0])
+        self.assertTrue(data.eligibility(needs_edu, self.ALL_C, ["Sciences"])[0])
+
+    def test_unparseable_clause_is_advisory_not_blocking(self):
+        # The clause we can't parse must not block; the parseable one still does.
+        ok, unmet = self._eligible("requirements for the functional area", self.ALL_C, [])
+        self.assertTrue(ok)
+        self.assertFalse(self._eligible("INT B+, requirements for the functional area",
+                                        self.ALL_C, [])[0])
+
+
+class TestRankLadder(unittest.TestCase):
+    def _ranks_table(self):
+        return {"page": 17, "title": "Military Ranks", "rows": [
+            ["US", "SOVIET", "POLISH", "SWEDISH"],
+            ["Private", "Ryadovoy", "Szeregowy", "Menig"],
+            ["Private First Class", "–", "Starszy szeregowy", "–"],
+            ["Corporal / Specialist", "Efreitor", "Kapral", "Korpral"],
+            ["Sergeant", "Mladshiy Serzhant", "Plutonowy", "Furir"],
+            ["Staff Sergeant", "Serzhant", "Sierżant", "Sergeant"],
+            ["Sergeant First Class", "Starshiy Serzhant", "Starszy sierżant", "–"],
+            ["Second Lieutenant", "Mladshiy Leytenant", "Podporucznik", "Fänrik"],
+        ]}
+
+    def test_parse_ranks_reads_the_ladder(self):
+        from lorehound.chargen.t2k_prose import parse_ranks
+        got = parse_ranks([{"rows": [["x", "y"]]}, self._ranks_table()])
+        self.assertEqual(got["columns"], ["us", "soviet", "polish", "swedish"])
+        self.assertEqual(got["rows"][0], ["Private", "Ryadovoy", "Szeregowy", "Menig"])
+
+    def test_parse_ranks_missing_returns_empty(self):
+        from lorehound.chargen.t2k_prose import parse_ranks
+        self.assertEqual(parse_ranks([]), {})
+        self.assertEqual(parse_ranks([{"rows": [["A", "B", "C", "D"]]}]), {})
+
+    def test_rank_name_localizes_with_spine_fallback(self):
+        from lorehound.chargen.data import T2KData
+        from lorehound.chargen.t2k_prose import parse_ranks
+        data = T2KData(game="Twilight: 2000", ranks=parse_ranks([self._ranks_table()]))
+        self.assertEqual(data.rank_levels()[3], "Sergeant")
+        self.assertEqual(data.rank_name("soviet", 3), "Mladshiy Serzhant")
+        # Soviet has no PFC ("–") → fall back to the spine label.
+        self.assertEqual(data.rank_name("soviet", 1), "Private First Class")
+
+
+class TestRollLine(unittest.TestCase):
+    def test_shows_most_recent_roll(self):
+        from lorehound.chargen.model import StepResult
+        from lorehound.chargen.render import last_roll_line
+        history = [
+            StepResult("a", value="x", detail="x"),                 # a choice (no total)
+            StepResult("r", value="2d3 [1, 2]", total=3, detail="2d3 [1, 2]"),
+            StepResult("c", value="picked", detail="Picked"),       # later choice
+        ]
+        line = last_roll_line(history)
+        self.assertIn("3", line)
+        self.assertIn("2d3", line)
+
+    def test_empty_when_no_roll(self):
+        from lorehound.chargen.render import last_roll_line
+        self.assertEqual(last_roll_line([]), "")
+
 
 class TestT2KProse(unittest.TestCase):
     """The childhood D6 table is parsed from the book's prose (blank-line-delimited

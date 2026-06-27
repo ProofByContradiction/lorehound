@@ -1,10 +1,11 @@
-"""Parse Twilight 2000 chargen tables that live in the book's *prose* rather than
-as structured tables — currently the Childhood D6 table.
+"""Parse Twilight 2000 chargen data that the generic career detector doesn't pick up
+— the Childhood D6 table (in prose) and the Military Ranks ladder (a structured table).
 
 The parser is in code; the rulebook data it reads stays in the gitignored cache
 (same principle as the career reconstructor). It runs at index time via the
 ``extract_prose`` hook on the registered T2K system, and its output is stashed on
-``RulesService.chargen_aux`` for the flow to read.
+``RulesService.chargen_aux`` for the flow to read — so promotions step a real rank
+ladder sourced from the index rather than anything embedded here.
 """
 
 from __future__ import annotations
@@ -48,10 +49,35 @@ def parse_childhood(text: str) -> list[tuple[str, list[str]]]:
     return list(zip(classes, triples, strict=True))
 
 
-def extract_t2k_prose(text: str) -> dict:
-    """``extract_prose`` hook: parsed chargen tables from one document's text."""
+# The Military Ranks table is a structured grid: a header row of nationality columns
+# then one row per rank level (ascending), "–" where a nationality has no equivalent.
+_RANK_COLUMNS = ("us", "soviet", "polish", "swedish")
+
+
+def parse_ranks(tables: list | None) -> dict:
+    """The Military Ranks ladder as ``{"columns": [...], "rows": [[r0,r1,r2,r3], …]}``,
+    ascending by level (one name per nationality column). ``{}`` if the document has no
+    recognisable ranks table. Levels are shared across nationalities (the US column is
+    the spine); a column may hold ``–`` where that nation skips a level."""
+    for t in tables or []:
+        rows = t.get("rows") if isinstance(t, dict) else None
+        if not rows or len(rows) < 6:
+            continue
+        header = [str(c or "").strip().lower() for c in rows[0][:4]]
+        if header == list(_RANK_COLUMNS):
+            data = [[str(c or "").strip() for c in r[:4]] for r in rows[1:] if any(r)]
+            if len(data) >= 6 and all(len(r) == 4 for r in data):
+                return {"columns": list(_RANK_COLUMNS), "rows": data}
+    return {}
+
+
+def extract_t2k_prose(text: str, tables: list | None = None) -> dict:
+    """``extract_prose`` hook: auxiliary chargen data from one document's text + tables."""
     out: dict = {}
     childhood = parse_childhood(text)
     if childhood:
         out["childhood"] = [(c, list(skills)) for c, skills in childhood]
+    ranks = parse_ranks(tables)
+    if ranks:
+        out["ranks"] = ranks
     return out

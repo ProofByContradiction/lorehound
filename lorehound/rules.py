@@ -599,7 +599,7 @@ class RulesService:
                 game, _book = _split_game_and_file(doc.name)
                 system = chargen_for(game)
                 if system is not None and system.extract_prose is not None:
-                    parsed = system.extract_prose(doc.text)
+                    parsed = system.extract_prose(doc.text, doc.tables)
                     if parsed:
                         aux.setdefault(game, {}).update(parsed)
             index = SearchIndex()

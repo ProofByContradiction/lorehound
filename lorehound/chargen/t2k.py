@@ -46,11 +46,14 @@ WAR_DICE = "1d8"             # each term (from the 2nd): D8 under #terms → WWI
 TERM_HARD_CAP = 10           # safety bound; the war check almost always ends it sooner
 
 _FIDELITY_NOTE = (
-    "Attributes, childhood, the specialty check, and aging follow the "
-    "rules-as-written (C baseline, 2D3 increases, CUF D; childhood class grants a "
-    "skill; 6+ skill roll earns a specialty; D6/term aging with the D8-vs-terms age "
-    "effect and war trigger). Per-term skill gains are slightly simplified and the "
-    "Archetype method isn't built — confirm those against your table."
+    "Built rules-as-written: nationality sets your languages and rank ladder; attributes "
+    "start at C with 2D3 increases (CUF starts D); childhood trains a skill; career "
+    "requirements are enforced; each term's advancement roll (6+) earns a specialty AND a "
+    "promotion — stepping your nationality's rank ladder and raising CUF a step; aging uses "
+    "D6/term with the D8-vs-terms age effect and war trigger. Approximations: the "
+    "advancement roll uses your best die (the skill→attribute pairing isn't in our data), "
+    "and childhood's bonus specialty and the Archetype method aren't built — confirm those "
+    "against your table."
 )
 
 
@@ -89,15 +92,15 @@ def t2k_flow(ctx):  # -> Flow (generator)
         draft.notes["Note"] = "The T2K library has no career data indexed yet."
         return
 
+    nationality = yield from _nationality(ctx, draft)  # T2K step 1: languages + rank ladder
     yield from _attributes(ctx, data, draft)
     known: dict[str, str] = {}            # trained skill -> rating (untrained omitted)
     yield from _childhood(ctx, data, draft, known)
-    yield from _career_terms(ctx, data, draft, known)
+    yield from _career_terms(ctx, data, draft, known, nationality)
     yield from _at_war(ctx, draft, known)
 
     draft.skills = dict(sorted(known.items()))
     _finalize_derived(draft)
-    yield from _finishing_touches(ctx, draft)
 
     draft.notes["Reminder"] = "Define a moral code and a 'buddy' (a key relationship) with your group."
     draft.notes.setdefault("Permanent rads", "0")
@@ -157,37 +160,47 @@ def _bump_skill(known: dict[str, str], skill: str, ctx) -> None:
     ctx.log(f"{skill} → {known[skill]}")
 
 
-def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
+def _career_terms(ctx, data: T2KData, draft, known: dict[str, str], nationality: str):
     """Serve career terms until WWIII breaks out — a D8 'war' check that grows likelier
     each term (it triggers when the roll comes up under the number of terms served), or
-    a safety cap is hit. Each term grants skills + a specialty roll, ages the character
+    a safety cap is hit. Each term enters a career you *qualify* for, grants two distinct
+    skill increases + an advancement roll (specialty + promotion), ages the character
     (D6), and — from the 2nd term — risks an age effect (a D8 check on the same
     rising threshold that drops one attribute a step)."""
     age = STARTING_AGE
     term = 0
+    rank = _RankTrack(data, nationality)
     while term < TERM_HARD_CAP:
         term += 1
+        # Hard-block: only offer careers the character qualifies for (advisory clauses
+        # never block). If somehow none qualify, fall back to all so we can't dead-end.
+        eligible = [c for c in data.careers
+                    if data.eligibility(c, draft.attributes, draft.career_history)[0]]
+        pool = eligible or data.careers
         options = [
             Option(c.name, c.name, (c.rank or "civilian") + (f" · {c.requirements}" if c.requirements else ""))
-            for c in data.careers
+            for c in pool
         ]
         pick = yield Step(
             f"career_{term}", StepKind.CHOICE,
             f"Term {term}: choose a career", options=options, essential=True,
+            detail="Only careers you currently qualify for are shown.",
         )
         career = data.career(pick.value)
         if career is None:
             break
-        if career.is_military and not draft.rank:
-            draft.rank = career.rank
+        rank.enter(career, draft)
 
         bumps = SKILLS_PER_TERM
+        raised: set[str] = set()   # two increases per term must be distinct skills
         # The first term must train Ranged Combat (if the career offers it).
         if term == 1 and any(s.lower() == RANGED_COMBAT.lower() for s in career.skills):
             _bump_skill(known, RANGED_COMBAT, ctx)
+            raised.add(RANGED_COMBAT)
             bumps -= 1
         for b in range(bumps):
-            choices = [s for s in career.skills if not _at_max(known.get(s, "F"), _SKILL_LADDER)]
+            choices = [s for s in career.skills
+                       if s not in raised and not _at_max(known.get(s, "F"), _SKILL_LADDER)]
             if not choices:
                 break
             sk = yield Step(
@@ -197,10 +210,9 @@ def _career_terms(ctx, data: T2KData, draft, known: dict[str, str]):
                          for s in choices],
             )
             _bump_skill(known, sk.value, ctx)
+            raised.add(sk.value)
 
-        spec_name = ""
-        if career.specialties:
-            spec_name = yield from _term_specialty(ctx, draft, career, known, term)
+        spec_name = yield from _term_advancement(ctx, draft, career, known, term, rank)
 
         draft.gear = list(career.gear)  # most recent posting determines starting gear
         draft.career_history.append(career.name + (f" ({spec_name})" if spec_name else ""))
@@ -250,27 +262,98 @@ def _age_effect(ctx, draft, term: int):
     ctx.log(f"Age effect: {drop.value} → {draft.attributes[drop.value]}")
 
 
-def _term_specialty(ctx, draft, career, known: dict[str, str], term: int):
-    """Earn a specialty with a skill check: roll your best trained career-skill die;
-    on 6+ choose one of the career's specialties (the book lets you roll or choose).
-    A failed check means no specialty that term."""
-    trained = [known[s] for s in career.skills if s in known]
-    die = max((rating_to_sides(r) for r in trained), default=rating_to_sides("D"))
+def _term_advancement(ctx, draft, career, known: dict[str, str], term: int, rank: _RankTrack):
+    """The term's advancement check (T2K's per-term skill roll). On a success you earn a
+    specialty AND — if you hold a rank — a promotion (one step up your nationality's rank
+    ladder, raising Coolness Under Fire a step); on a failure, neither. You only pick from
+    specialties you don't already have (the book has you re-roll duplicates). The roll
+    approximates a T2K skill roll with your best die (skill or attribute), succeeding on
+    6+ — the exact skill→attribute pairing isn't in our data (see _FIDELITY_NOTE)."""
+    skill_sides = [rating_to_sides(known[s]) for s in career.skills if s in known]
+    attr_sides = [rating_to_sides(v) for v in draft.attributes.values()]
+    die = max(skill_sides + attr_sides) if skill_sides else max(attr_sides, default=rating_to_sides("C"))
     roll = yield Step(
-        f"spec_check_{term}", StepKind.ROLL,
-        f"Term {term}: specialty check — roll your best {career.name} skill",
-        roll_spec=f"d{die}", detail=f"{SUCCESS_THRESHOLD}+ earns a specialty.",
+        f"advance_{term}", StepKind.ROLL,
+        f"Term {term}: advancement check — roll your best {career.name} skill",
+        roll_spec=f"d{die}",
+        detail=f"{SUCCESS_THRESHOLD}+ earns a specialty"
+               + (" and a promotion." if rank.has_rank else "."),
     )
     if (roll.total or 0) < SUCCESS_THRESHOLD:
-        ctx.log(f"Specialty check failed (rolled {roll.total}).")
+        ctx.log(f"Advancement check failed (rolled {roll.total}) — no specialty or promotion.")
+        return ""
+    rank.promote(draft, ctx)
+    available = [name for _roll, name in career.specialties if name not in draft.specialties]
+    if not available:
         return ""
     sp = yield Step(
         f"spec_{term}", StepKind.CHOICE, f"Term {term}: specialty earned — pick one",
-        options=[Option(name, name) for _roll, name in career.specialties],
+        options=[Option(name, name) for name in available],
     )
     if sp.value and sp.value not in draft.specialties:
         draft.specialties.append(sp.value)
     return sp.value
+
+
+# --- Military rank ladder --------------------------------------------------
+# Starting ranks in the career data are abbreviated; expand them to match the ladder.
+_RANK_ALIASES = {
+    "pfc": "private first class",
+    "2nd lieutenant": "second lieutenant",
+    "1st lieutenant": "first lieutenant",
+}
+
+
+def _norm_rank(name: str) -> str:
+    s = " ".join((name or "").strip().lower().split())
+    return _RANK_ALIASES.get(s, s)
+
+
+def _rank_start_level(levels: list[str], rank_name: str) -> int:
+    """The ladder index for a career's starting rank (exact match, then substring)."""
+    want = _norm_rank(rank_name)
+    for i, lv in enumerate(levels):
+        if _norm_rank(lv) == want:
+            return i
+    for i, lv in enumerate(levels):
+        if want and want in lv.lower():
+            return i
+    return 0
+
+
+class _RankTrack:
+    """Tracks the character's position on the nationality rank ladder through the term
+    loop. Entering a military career lifts you to at least that career's starting rank;
+    a promotion steps you up one level and raises CUF a step. Degrades gracefully to
+    recording the starting rank only when the ranks table isn't indexed."""
+
+    def __init__(self, data: T2KData, nationality: str):
+        self._data = data
+        self._nat = nationality
+        self._levels = data.rank_levels()
+        self.level = -1
+
+    @property
+    def has_rank(self) -> bool:
+        return self.level >= 0
+
+    def enter(self, career, draft) -> None:
+        if not career.is_military:
+            return
+        if self._levels:
+            self.level = max(self.level, _rank_start_level(self._levels, career.rank))
+            draft.rank = self._data.rank_name(self._nat, self.level)
+        elif not draft.rank:
+            draft.rank = career.rank   # no ranks table indexed — record the start only
+
+    def promote(self, draft, ctx) -> None:
+        if not self.has_rank or not self._levels:
+            return
+        self.level = min(self.level + 1, len(self._levels) - 1)
+        draft.rank = self._data.rank_name(self._nat, self.level)
+        cuf = _step_up(draft.derived.get("Coolness Under Fire", CUF_START), _ATTR_LADDER)
+        draft.derived["Coolness Under Fire"] = cuf
+        ctx.log(f"Promoted to {draft.rank}; CUF → {cuf}.")
 
 
 def _at_war(ctx, draft, known: dict[str, str]):
@@ -281,8 +364,9 @@ def _at_war(ctx, draft, known: dict[str, str]):
     trained = sorted(known)
     if not trained:
         return
+    raised: set[str] = set()   # sharpen two *distinct* skills
     for b in range(2):
-        choices = [s for s in trained if not _at_max(known[s], _SKILL_LADDER)]
+        choices = [s for s in trained if s not in raised and not _at_max(known[s], _SKILL_LADDER)]
         if not choices:
             break
         sk = yield Step(
@@ -290,6 +374,7 @@ def _at_war(ctx, draft, known: dict[str, str]):
             options=[Option(s, f"{s} ({known[s]} → {_step_up(known[s], _SKILL_LADDER)})") for s in choices],
         )
         _bump_skill(known, sk.value, ctx)
+        raised.add(sk.value)
 
 
 def _finalize_derived(draft) -> None:
@@ -311,17 +396,22 @@ _NATIONS = [
 _PACT = {"soviet", "polish"}
 
 
-def _finishing_touches(ctx, draft):
+def _nationality(ctx, draft):
+    """T2K character creation opens by choosing where you're from: it fixes your starting
+    languages and your military rank ladder, so it leads the life path (in quick mode it's
+    the first prompt) rather than trailing it as a finishing touch. Returns the chosen
+    nationality key so the term loop can pick the matching rank ladder."""
     nat = yield Step(
         "nationality", StepKind.CHOICE, "Where is your character from?",
         options=_NATIONS, essential=True,
-        detail="Sets starting languages and colours your gear.",
+        detail="Sets starting languages and your rank ladder.",
     )
     draft.notes["Nationality"] = nat.detail
     langs = ["native language", "some English"]
     if nat.value in _PACT:
         langs.append("some Russian")
     draft.notes["Languages"] = ", ".join(langs)
+    return nat.value
 
 
 register(
