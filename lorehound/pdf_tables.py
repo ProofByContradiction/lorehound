@@ -38,6 +38,66 @@ def _interval(v: float, edges: list[float]) -> int:
     return -1
 
 
+def _recover_trailing_rows(
+    words: list, xe: list[float], ye: list[float], page_bottom: float, max_recover: int = 24
+) -> list[float]:
+    """Extend ``ye`` downward to recover data rows dropped below the last ruling line.
+
+    ``find_tables(strategy="lines")`` omits a row band that has no bottom ruling
+    line — common with alternating row shading, where only every other row is ruled.
+    The word-bucketing in :func:`extract_tables` still recovers un-ruled rows that
+    fall *between* detected bands (they sit inside the grid's y-range), but a row
+    flush *below* the last band is past ``ye[-1]`` and lost — e.g. the D12 bottom row
+    of the T2K "Chance of Success" tables.
+
+    We walk downward one row-pitch at a time, taking the band of words flush below
+    the grid and accepting it only while it forms a clean, column-aligned row: every
+    word fits inside a single column (no word straddles a column boundary — prose
+    does), the label column and at least two columns overall are filled, and the band
+    sits within ~one pitch below (not past a blank-row gap). So a dropped row is
+    recovered — including its wrapped continuation lines, which a pitch-tall band
+    keeps with the row — but a paragraph or the next table below (separated by a gap,
+    or not column-aligned) is not. The reach is sized to the detected row pitch, which
+    runs tighter than the true row spacing, so each band lands on a single row rather
+    than merging neighbours. Returns ``ye`` unchanged when nothing flush and aligned
+    remains to recover.
+
+    The alignment guards are what stop the walk (it halts the moment a band fails to
+    be a clean grid row, e.g. a footnote line); ``max_recover`` is only a runaway
+    backstop, so it is set well above any real table's dropped-row count.
+    """
+    nc = len(xe) - 1
+    if nc < 2 or len(ye) < 3:
+        return ye
+    pitch = (ye[-1] - ye[0]) / (len(ye) - 1)
+    if pitch <= 1:
+        return ye
+    reach = pitch + max(3.0, pitch * 0.6)
+
+    def fits_one_column(w) -> bool:
+        ci0, ci1 = _interval(w[WORD_X0], xe), _interval(w[WORD_X1], xe)
+        return ci0 == ci1 and 0 <= ci0 < nc
+
+    for _ in range(max_recover):
+        top = ye[-1]
+        band = [
+            w for w in words
+            if top + 1 <= (w[WORD_Y0] + w[WORD_Y1]) / 2 <= top + reach
+            and xe[0] - 2 <= (w[WORD_X0] + w[WORD_X1]) / 2 <= xe[-1] + 2
+            and w[WORD_TEXT].strip()
+        ]
+        if not band or not all(fits_one_column(w) for w in band):
+            break
+        cols = {_interval((w[WORD_X0] + w[WORD_X1]) / 2, xe) for w in band}
+        if 0 not in cols or len(cols) < 2:
+            break  # a real data row fills its label column and at least one more
+        new_bottom = max(w[WORD_Y1] for w in band) + 1
+        if new_bottom <= top or new_bottom > page_bottom:
+            break
+        ye = ye + [new_bottom]
+    return ye
+
+
 def _title(page, x0: float, y0: float, x1: float, y1: float) -> str:
     """The heading line just above the table (prefer the largest font)."""
     best = None  # (font_size, text, bottom_y)
@@ -349,6 +409,9 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
             ye = _cluster({round(c[1]) for c in cells} | {round(c[3]) for c in cells}, 4)
             if len(xe) < 3 or len(ye) < 2:
                 continue
+            # Recover rows dropped below the last ruling line (un-ruled bottom row,
+            # e.g. the T2K "Chance of Success" D12 row) before bucketing words.
+            ye = _recover_trailing_rows(words, xe, ye, page.rect.height)
             nc, nr = len(xe) - 1, len(ye) - 1
             grid = [["" for _ in range(nc)] for _ in range(nr)]
             for w in words:

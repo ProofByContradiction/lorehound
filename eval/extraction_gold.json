@@ -1,0 +1,47 @@
+{
+  "_readme": {
+    "purpose": "Answer key for the EXTRACTION eval (scripts/extraction_eval.py). Each entry pins the correct STRUCTURE of one specific table in the indexed library, so we can measure whether find_tables / the reconstructors captured it faithfully. Turns each QA correction into a regression fixture — and, long-term, a labelled example for a learned source-material scanner (see the project memory on the extraction roadmap).",
+    "how_to_score": "Find the cached table by `match_cells` (cell values unique enough to identify it), then check `expect_headers` against the header row, `expect_row_labels` against the first column of the data rows, and `min_rows`. A table is correct only if all three hold.",
+    "gate_vs_advisory": "`known_broken: true` entries are advisory TODOs — tables we KNOW are currently mis-extracted; they're reported but don't gate, like edition_sensitive entries in the retrieval eval. The gate accuracy covers the rest, so the eval is a live regression guard for known-good tables from day one. When an extraction fix lands, flip `known_broken` to false so the table joins the gate.",
+    "local_only": "Reads cache/*.json (the copyrighted books can't live in the repo), so it's a LOCAL guard like scripts/retrieval_eval.py. To validate an extraction fix: reindex with force (re-download + re-extract → updates the cache), then re-run the eval.",
+    "created": "2026-06-27"
+  },
+  "entries": [
+    {
+      "id": "t2k-chance-of-success-pushed",
+      "system": "Twilight 2000 (4E)",
+      "page": 48,
+      "title": "Chance of Success, Pushed Roll",
+      "match_cells": ["82%", "88%"],
+      "expect_headers": ["D6", "D8", "D10", "D12"],
+      "expect_row_labels": ["D6", "D8", "D10", "D12"],
+      "min_rows": 6,
+      "known_broken": false,
+      "what_was_wrong": "FIXED (find-tables-lines-v11): find_tables(strategy=lines) dropped the bottom D12 attribute/skill row (no bottom ruling line). The D6/D8/D10/D12 columns are present but the D12 ROW was missing — captured 5 rows, should be 6. The trailing-row recovery pass (pdf_tables._recover_trailing_rows) now restores it: ['D12', '88%', '93%', '96%', '97%']."
+    },
+    {
+      "id": "t2k-chance-of-success-initial",
+      "system": "Twilight 2000 (4E)",
+      "page": 48,
+      "title": "Chance of Success, Initial Roll",
+      "match_cells": ["17%", "58%"],
+      "expect_headers": ["D6", "D8", "D10", "D12"],
+      "expect_row_labels": ["D6", "D8", "D10", "D12"],
+      "min_rows": 6,
+      "known_broken": false,
+      "what_was_wrong": "FIXED (find-tables-lines-v11): same D12 bottom-row drop as the pushed-roll table on the same page (recovered row ['D12', '65%', '74%', '79%', '82%']). Its extracted title is still garbled ('shows the chance when pushing.') — title-only, the rows are now complete."
+    },
+    {
+      "id": "t2k-military-ranks",
+      "system": "Twilight 2000 (4E)",
+      "page": 17,
+      "title": "Military Ranks",
+      "match_cells": ["Ryadovoy", "Szeregowy"],
+      "expect_headers": ["US", "SOVIET", "POLISH", "SWEDISH"],
+      "expect_row_labels": ["Private", "Sergeant", "Captain", "Lieutenant General"],
+      "min_rows": 19,
+      "known_broken": false,
+      "what_was_wrong": "Regression guard for a KNOWN-GOOD table — the full 18-rank US/Soviet/Polish/Swedish ladder that chargen promotions read. Fails if a find_tables change drops ranks or the bottom Lieutenant General row."
+    }
+  ]
+}
