@@ -50,21 +50,33 @@ def _norm(cell: object) -> str:
 
 
 def load_cache_tables() -> list[dict]:
-    """Every extracted table dict across the cache (each carries page/title/rows)."""
+    """Every extracted table dict across the cache (each carries page/title/rows).
+
+    Each table is tagged with ``_book`` — a normalized snippet of its source book's
+    text — so an entry can be scoped to one book. Page numbers collide across books
+    (every book has a page 24), so without this a generic ``match_cells`` like
+    ``["1D","Mishap"]`` could resolve to the wrong book's same-numbered page."""
     tables: list[dict] = []
     for path in sorted(glob.glob(os.path.join(_CACHE, "*.json"))):
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-        tables.extend(data.get("tables") or [])
+        book = _norm(data.get("text", ""))  # full text: book_match may be any snippet
+        for t in data.get("tables") or []:
+            t["_book"] = book
+            tables.append(t)
     return tables
 
 
 def _find_table(entry: dict, tables: list[dict]) -> dict | None:
-    """The cached table containing all of the entry's identifying ``match_cells``
-    (preferring the stated page when several match)."""
+    """The cached table containing all of the entry's identifying ``match_cells``,
+    scoped to the entry's ``book_match`` book and preferring the stated page when
+    several match."""
     want = {_norm(c) for c in entry.get("match_cells", [])}
+    book = _norm(entry["book_match"]) if entry.get("book_match") else ""
     matches = []
     for t in tables:
+        if book and book not in t.get("_book", ""):
+            continue
         cells = {_norm(c) for r in t.get("rows") or [] for c in r}
         if want and want <= cells:
             matches.append(t)
@@ -95,11 +107,20 @@ def score_entry(entry: dict, tables: list[dict]) -> dict:
     missing_headers = [h for h in exp_headers if h not in header]
     missing_labels = [lbl for lbl in exp_labels if _norm(lbl) not in labels]
     min_rows = int(entry.get("min_rows", 0))
-    rows_ok = len(rows) >= min_rows
+    # ``max_rows`` (optional, 0 = no cap) catches OVER-capture — two tables merged
+    # into one, or stray lines pulled in — which a min-only check would pass.
+    max_rows = int(entry.get("max_rows", 0))
+    nrows = len(rows)
+    too_few = nrows < min_rows
+    too_many = max_rows > 0 and nrows > max_rows
+    rows_ok = not too_few and not too_many
     res.update(
-        rows=len(rows),
+        rows=nrows,
         min_rows=min_rows,
+        max_rows=max_rows,
         rows_ok=rows_ok,
+        too_few=too_few,
+        too_many=too_many,
         missing_headers=missing_headers,
         missing_labels=missing_labels,
         correct=(not missing_headers and not missing_labels and rows_ok),
@@ -108,16 +129,24 @@ def score_entry(entry: dict, tables: list[dict]) -> dict:
 
 
 def summarize(results: list[dict]) -> dict:
-    """Gate accuracy over non-advisory entries; advisory (known_broken) reported apart."""
+    """Two numbers: the gate accuracy over non-advisory entries (the regression
+    guard), and the overall structural accuracy over ALL entries (the realistic
+    cross-book picture — advisory/known_broken tables count as the failures they
+    currently are). Advisory entries are reported apart so the gate isn't dragged
+    down by tables we already know are mis-extracted."""
     gated = [r for r in results if not r["known_broken"]]
     advisory = [r for r in results if r["known_broken"]]
-    correct = sum(1 for r in gated if r["correct"])
+    gated_correct = sum(1 for r in gated if r["correct"])
+    overall_correct = sum(1 for r in results if r["correct"])
     return {
-        "gate_accuracy": (correct / len(gated)) if gated else 1.0,
+        "gate_accuracy": (gated_correct / len(gated)) if gated else 1.0,
         "gated_entries": len(gated),
-        "gated_correct": correct,
+        "gated_correct": gated_correct,
         "advisory_entries": len(advisory),
         "advisory_correct": sum(1 for r in advisory if r["correct"]),
+        "overall_accuracy": (overall_correct / len(results)) if results else 1.0,
+        "total_entries": len(results),
+        "overall_correct": overall_correct,
     }
 
 
@@ -133,14 +162,20 @@ def _print_report(results: list[dict], summary: dict, threshold: float) -> None:
         if not r["found"]:
             print(f"       {r.get('detail', '')}")
             continue
-        print(f"       rows {r['rows']}/{r['min_rows']} (min){'' if r['rows_ok'] else '  <TOO FEW>'}")
+        bounds = f"min {r['min_rows']}" + (f", max {r['max_rows']}" if r.get("max_rows") else "")
+        flag = "" if r["rows_ok"] else ("  <TOO FEW>" if r.get("too_few") else "  <OVER-CAPTURED>")
+        print(f"       rows {r['rows']} ({bounds}){flag}")
         if r["missing_headers"]:
             print(f"       missing headers: {r['missing_headers']}")
         if r["missing_labels"]:
             print(f"       missing row labels: {r['missing_labels']}")
     s = summary
     print(
-        f"\n— gate table-accuracy (known-good): {s['gate_accuracy']:.0%} over "
+        f"\n— overall structural accuracy: {s['overall_accuracy']:.0%} over all "
+        f"{s['total_entries']} tables ({s['overall_correct']} correct) —"
+    )
+    print(
+        f"— gate table-accuracy (known-good): {s['gate_accuracy']:.0%} over "
         f"{s['gated_entries']} entries ({s['gated_correct']} correct); "
         f"{s['advisory_entries']} advisory ({s['advisory_correct']} already correct) —"
     )
