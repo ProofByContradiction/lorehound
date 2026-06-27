@@ -47,12 +47,12 @@ TERM_HARD_CAP = 10           # safety bound; the war check almost always ends it
 
 _FIDELITY_NOTE = (
     "Built rules-as-written: nationality sets your languages and rank ladder; attributes "
-    "start at C with 2D3 increases (CUF starts D); childhood trains a skill; career "
-    "requirements are enforced; each term's advancement roll (6+) earns a specialty AND a "
-    "promotion — stepping your nationality's rank ladder and raising CUF a step; aging uses "
-    "D6/term with the D8-vs-terms age effect and war trigger. Approximations: the "
-    "advancement roll uses your best die (the skill→attribute pairing isn't in our data), "
-    "and childhood's bonus specialty and the Archetype method aren't built — confirm those "
+    "start at C with 2D3 increases (CUF starts D); childhood trains a skill and rolls a "
+    "bonus specialty; career requirements are enforced; each term's advancement roll (6+) "
+    "earns a specialty AND a promotion — stepping your nationality's rank ladder and raising "
+    "CUF a step; aging uses D6/term with the D8-vs-terms age effect and war trigger. "
+    "Approximations: the advancement roll uses your best die (the skill→attribute pairing "
+    "isn't in our data), and the Archetype (quick-build) method isn't built — confirm those "
     "against your table."
 )
 
@@ -153,6 +153,28 @@ def _childhood(ctx, data: T2KData, draft, known: dict[str, str]):
         options=[Option(s, s) for s in cls[1]],
     )
     _bump_skill(known, skill.value, ctx)
+
+    # Childhood also grants one bonus specialty (rolled on a D6 over the background's
+    # column). The book also allows choosing; if extraction dropped the rolled entry
+    # (e.g. the D6=1 row), fall back to a choice among the background's specialties.
+    specs = data.childhood_specialties.get(cls[0], {})
+    if specs:
+        roll = yield Step(
+            "childhood_spec", StepKind.ROLL,
+            f"{cls[0]} childhood — roll D6 for a bonus specialty",
+            roll_spec="d6", detail="Your childhood grants one specialty.",
+        )
+        sp = specs.get(roll.total or 0)
+        if not sp:
+            choice = yield Step(
+                "childhood_spec_pick", StepKind.CHOICE,
+                f"{cls[0]} childhood — choose a bonus specialty",
+                options=[Option(o, o) for o in sorted(set(specs.values()))],
+            )
+            sp = choice.value
+        if sp and sp not in draft.specialties:
+            draft.specialties.append(sp)
+            ctx.log(f"Childhood specialty: {sp}")
 
 
 def _bump_skill(known: dict[str, str], skill: str, ctx) -> None:
