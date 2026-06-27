@@ -211,6 +211,9 @@ class T2KData:
     careers: list[T2KCareer] = field(default_factory=list)
     # Childhood D6 classes: (class_name, [skill, skill, skill]); empty if not indexed.
     childhood: list[tuple[str, list[str]]] = field(default_factory=list)
+    # Childhood bonus specialties: {class_name: {d6: specialty}}; the roll-of-1 entry may
+    # be absent (the extraction drops that grid row), so the flow falls back to a choice.
+    childhood_specialties: dict = field(default_factory=dict)
     # Military rank ladder from the index: {"columns": [...], "rows": [[r0,r1,r2,r3], …]}
     # ascending by level; {} if the ranks table wasn't indexed (promotions degrade to
     # recording the starting rank only).
@@ -282,4 +285,10 @@ def build_t2k_data(rules, game: str) -> T2KData:
     careers.sort(key=lambda c: (not c.is_military, c.name))  # military first, then A→Z
     aux = getattr(rules, "chargen_aux", {}).get(game, {})
     childhood = [(c, list(skills)) for c, skills in aux.get("childhood", [])]
-    return T2KData(game=game, careers=careers, childhood=childhood, ranks=aux.get("ranks", {}))
+    return T2KData(
+        game=game,
+        careers=careers,
+        childhood=childhood,
+        childhood_specialties=aux.get("childhood_specialties", {}),
+        ranks=aux.get("ranks", {}),
+    )

@@ -212,13 +212,25 @@ class TestT2KFlow(unittest.TestCase):
             specialties=[("1", "Rifleman"), ("2", "Tanker")], gear=["Assault rifle", "Knife"],
         )
         ch = [("Street Kid", ["Close Combat", "Recon", "Mobility"])] if childhood else []
+        # D6=1 deliberately absent (mirrors the extraction gap) → flow falls back to choice.
+        cs = (
+            {"Street Kid": {2: "Brawler", 3: "Runner", 4: "Infiltrator",
+                            5: "Scrounger", 6: "Locksmith"}}
+            if childhood else {}
+        )
         if single:
-            return T2KData(game="Twilight: 2000", careers=[combat], childhood=ch)
+            return T2KData(
+                game="Twilight: 2000", careers=[combat], childhood=ch,
+                childhood_specialties=cs,
+            )
         doctor = T2KCareer(
             name="Doctor", skills=["Medical Aid", "Persuasion"],
             specialties=[("1", "Combat Medic")], gear=["Medkit"],
         )
-        return T2KData(game="Twilight: 2000", careers=[combat, doctor], childhood=ch)
+        return T2KData(
+            game="Twilight: 2000", careers=[combat, doctor], childhood=ch,
+            childhood_specialties=cs,
+        )
 
     def _drive(self, mode, data, seed=3):
         from lorehound.chargen.engine import ChargenSession
@@ -307,6 +319,46 @@ class TestT2KFlow(unittest.TestCase):
         self.assertTrue(
             any(sk in s.draft.skills for sk in ("Close Combat", "Recon", "Mobility"))
         )
+
+    def test_childhood_grants_a_bonus_specialty(self):
+        # Childhood rolls a D6 for a bonus specialty over the background's column.
+        # Forcing every roll to 3 → Street Kid D6=3 = Runner; advancement rolls (3<6)
+        # earn no career specialty, so the childhood one is isolated.
+        from lorehound.chargen.engine import FAITHFUL, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+        rng = random.Random(1)
+        s = ChargenSession(
+            t2k_flow, mode=FAITHFUL, draft=CharacterDraft(game="Twilight: 2000"),
+            data=self._data(single=True, childhood=True), rng=rng,
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=3),
+        )
+        for _ in range(500):
+            if s.current is None:
+                break
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        self.assertIn("Runner", s.draft.specialties)
+
+    def test_childhood_specialty_falls_back_to_choice_when_roll_missing(self):
+        # D6=1 isn't in the data (extraction gap) → the flow must still grant one,
+        # chosen from the background's available specialties.
+        from lorehound.chargen.engine import FAITHFUL, ChargenSession
+        from lorehound.chargen.model import CharacterDraft
+        from lorehound.chargen.t2k import t2k_flow
+        rng = random.Random(1)
+        s = ChargenSession(
+            t2k_flow, mode=FAITHFUL, draft=CharacterDraft(game="Twilight: 2000"),
+            data=self._data(single=True, childhood=True), rng=rng,
+            roller=lambda spec: RollResult(expression=spec, groups=[], modifier=0, total=1),
+        )
+        for _ in range(500):
+            if s.current is None:
+                break
+            opts = s.current.options
+            s.resolve(rng.choice(opts).value if opts else None)
+        avail = {"Brawler", "Runner", "Infiltrator", "Scrounger", "Locksmith"}
+        self.assertTrue(set(s.draft.specialties) & avail)  # a childhood specialty was granted
 
     def _drive_with_roll(self, total):
         from lorehound.chargen.engine import QUICK, ChargenSession

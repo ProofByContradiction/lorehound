@@ -49,6 +49,59 @@ def parse_childhood(text: str) -> list[tuple[str, list[str]]]:
     return list(zip(classes, triples, strict=True))
 
 
+_PAGE_RE = re.compile(r"\[\[page (\d+)\]\]")
+
+
+def _childhood_page(text: str) -> int | None:
+    """The PDF page the childhood block sits on (from the nearest preceding ``[[page N]]``
+    marker), so we can find its specialty table among the document's tables."""
+    i = text.find("CHILDHOOD")
+    if i < 0:
+        return None
+    marks = list(_PAGE_RE.finditer(text[:i]))
+    return int(marks[-1].group(1)) if marks else None
+
+
+def parse_childhood_specialties(text: str, tables: list | None) -> dict:
+    """``{background_name: {d6: specialty}}`` for the childhood SPECIALTY (D6) grid,
+    read from the structured table on the childhood page — one column per background, in
+    the same order as :func:`parse_childhood`. ``{}`` if not recoverable.
+
+    The grid is a D6-indexed table with one column per childhood background, so we pick
+    the table on that page whose data rows have exactly ``backgrounds + 1`` columns (the
+    military-career specialty grid on the same page has one fewer). NOTE: the current
+    extraction drops this grid's D6=1 row (it leaks into the table title — a leading-row
+    drop, mirror of the trailing-row bug), so a background may lack its roll-of-1
+    specialty; the flow offers a choice among the rest in that case."""
+    page = _childhood_page(text)
+    if page is None:
+        return {}
+    backgrounds = [c for c, _ in parse_childhood(text)]
+    n = len(backgrounds)
+    if n == 0:
+        return {}
+    for t in tables or []:
+        if not isinstance(t, dict) or t.get("page") != page:
+            continue
+        rows = t.get("rows") or []
+        drows = [
+            r for r in rows
+            if r and re.fullmatch(r"[1-6]", str(r[0]).strip()) and len(r) == n + 1
+        ]
+        if len(drows) < 3:
+            continue
+        spec: dict[str, dict[int, str]] = {bg: {} for bg in backgrounds}
+        for r in drows:
+            d6 = int(str(r[0]).strip())
+            for i, bg in enumerate(backgrounds):
+                val = re.sub(r"\s+", " ", str(r[i + 1]).replace("- ", "")).strip()
+                if val:
+                    spec[bg][d6] = val
+        if sum(len(v) for v in spec.values()) >= n * 3:  # a real grid, not a stray match
+            return spec
+    return {}
+
+
 # The Military Ranks table is a structured grid: a header row of nationality columns
 # then one row per rank level (ascending), "–" where a nationality has no equivalent.
 _RANK_COLUMNS = ("us", "soviet", "polish", "swedish")
@@ -77,6 +130,9 @@ def extract_t2k_prose(text: str, tables: list | None = None) -> dict:
     childhood = parse_childhood(text)
     if childhood:
         out["childhood"] = [(c, list(skills)) for c, skills in childhood]
+    specs = parse_childhood_specialties(text, tables)
+    if specs:
+        out["childhood_specialties"] = specs
     ranks = parse_ranks(tables)
     if ranks:
         out["ranks"] = ranks
