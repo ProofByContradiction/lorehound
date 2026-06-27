@@ -48,10 +48,10 @@ _FACT_COVERAGE = 0.70   # fraction of a fact's content tokens that must be prese
 # Health threshold for the standalone CLI. Baseline was 0.32 fact-recall
 # (2026-06-22, top-5, 8 entries). The retrieval overhaul (stemming + worked-example
 # rescue) plus calibrating the gold set to realistic keyword queries + book-aligned
-# facts lifted gate fact-recall to ~0.83 (2026-06-26, top-8 to match /rule). The
-# in-suite regression FLOOR (tests/test_retrieval.py) sits below this so the test
-# fails only on a true drop.
-_DEFAULT_THRESHOLD = 0.60
+# facts lifted gate fact-recall to ~0.83 (2026-06-26, top-8 to match /rule); tuning
+# HEADING_BOOST 2.0→1.0 (2026-06-27) lifted it again to ~0.88. The in-suite regression
+# FLOOR (tests/test_retrieval.py) sits below this so the test fails only on a true drop.
+_DEFAULT_THRESHOLD = 0.80
 
 
 def load_gold(path: str = _GOLD) -> list[dict]:

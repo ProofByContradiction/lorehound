@@ -22,11 +22,11 @@ from lorehound.search_index import Chunk, SearchIndex
 from scripts.retrieval_eval import _norm, fact_present, resolve_game
 
 # In-suite regression floor for the live gold eval. After the retrieval overhaul
-# (stemming + worked-example rescue) and calibrating the gold set to realistic
-# keyword queries + book-aligned facts, gate fact-recall is ~0.83 (2026-06-26,
-# top-8). This floor sits below that with headroom for newly-added (initially
-# failing) targets, so the test fails only on a genuine regression.
-_REGRESSION_FLOOR = 0.60
+# (stemming + worked-example rescue), gold-set calibration, and tuning HEADING_BOOST
+# 2.0→1.0, gate fact-recall is ~0.88 (2026-06-27, top-8). This floor sits below that
+# with headroom for newly-added (initially failing) targets — roughly one new hard
+# target costs ~0.08 — so the test fails only on a genuine regression.
+_REGRESSION_FLOOR = 0.75
 
 
 def _toks(s: str) -> set:
@@ -78,6 +78,31 @@ class TestRetrievalInvariants(unittest.TestCase):
 
     def test_empty_query_returns_nothing(self):
         self.assertEqual(self._index().search("   "), [])
+
+    def test_heading_boost_does_not_bury_body_relevance(self):
+        # A chunk that only matches via its breadcrumb must not outrank one densely
+        # about the query in its body — the failure mode that an over-high HEADING_BOOST
+        # caused (granular facts crowded out of the top-k). Guards the 2.0→1.0 tuning.
+        idx = SearchIndex()
+        idx.build([
+            Chunk("T2K", "Core", "rules", "Combat › Ammo Dice › Overwatch", "p. 1",
+                  "During overwatch you interrupt an enemy when they move into the open ground."),
+            Chunk("T2K", "Core", "items", "Combat › Ammunition", "p. 2",
+                  "Ammo dice are D6 rolled with a ranged attack; each ammo die showing a 6 is "
+                  "an extra hit, and ammo dice are re-rolled when you push your roll."),
+        ])
+        hits = idx.search("ammo dice extra hit", game="T2K")
+        self.assertIn("Ammunition", hits[0].chunk.section)
+
+    def test_rel_cutoff_trims_weak_tail(self):
+        idx = SearchIndex()
+        idx.build([
+            Chunk("G", "C", "rules", "Strong", "p. 1", "alpha alpha alpha alpha beta gamma"),
+            Chunk("G", "C", "rules", "Weak", "p. 2", "alpha gamma delta epsilon zeta eta theta"),
+        ])
+        self.assertEqual(len(idx.search("alpha", game="G", min_rel=0.0)), 2)  # both kept
+        strict = idx.search("alpha", game="G", min_rel=0.9)                   # trims the tail
+        self.assertEqual([h.chunk.section for h in strict], ["Strong"])
 
 
 class TestRetrievalOverhaul(unittest.TestCase):
@@ -189,6 +214,45 @@ class TestLookupBadges(unittest.TestCase):
         self.assertIn("reference", rc._LOOKUP_SKIP)
         self.assertNotIn("card", rc._LOOKUP_SKIP)
         self.assertNotIn("rules", rc._LOOKUP_SKIP)
+
+
+class TestCategorizationRouting(unittest.TestCase):
+    """Committed (CI-safe) categorization-neutrality guard. Chunking/classification run
+    at index time over cached text, so a change to rules.py can silently re-route
+    content between categories. scripts/categorization_snapshot.py guards this against
+    the real cache (local only — copyrighted); this pins the major routing decisions on
+    synthetic inputs so a re-route is caught in CI. If an intended routing change lands
+    here, update these expectations deliberately."""
+
+    def test_prose_routes_rules_vs_reference(self):
+        from lorehound.rules import _chunks_for_doc
+        text = (
+            "[[page 10]]\n## COMBAT\n### MAKING ATTACKS\n"
+            "To attack roll the appropriate dice and compare to the target number "
+            "described here in full detail for the players.\n"
+            "[[page 250]]\n## INDEX\n### A\n"
+            "armor 12, attack 10, ammo 14, aging 41, encumbrance 19 listed here alphabetically.\n"
+        )
+        by_section = {c.section: c.category for c in _chunks_for_doc("SynthGame/Core.pdf", text)}
+        self.assertEqual(by_section.get("MAKING ATTACKS"), "rules")
+        self.assertEqual(by_section.get("A"), "reference")   # the alphabetical index
+
+    def test_tables_route_by_content(self):
+        from lorehound.rules import _tables_for_doc
+        tables = [
+            {"page": 100, "chapter": "Weapons", "title": "Assault Rifles", "rows": [
+                ["Weapon", "Damage", "Range", "Weight", "Cost"],
+                ["M16", "3", "100", "3.5", "500"], ["AK-74", "3", "90", "3.6", "450"]]},
+            {"page": 120, "chapter": "Vehicles", "title": "Military Vehicles", "rows": [
+                ["Vehicle", "Armor", "Speed", "Crew", "Cost"],
+                ["M1 Abrams", "20", "70", "4", "9000000"], ["HMMWV", "4", "120", "4", "60000"]]},
+            {"page": 40, "chapter": "Skills", "title": "Difficulty Modifiers", "rows": [
+                ["Difficulty", "DM"], ["Easy", "+4"], ["Average", "+0"], ["Difficult", "-2"]]},
+        ]
+        by_section = {c.section: c.category for c in _tables_for_doc("SynthGame/Core.pdf", tables)}
+        self.assertEqual(by_section.get("Weapons › Assault Rifles"), "items")
+        self.assertEqual(by_section.get("Vehicles › Military Vehicles"), "transport")
+        self.assertEqual(by_section.get("Skills › Difficulty Modifiers"), "tables")
 
 
 @unittest.skipUnless(
