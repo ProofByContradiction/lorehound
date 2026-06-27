@@ -61,6 +61,24 @@ class TestExtractionScorer(unittest.TestCase):
         self.assertFalse(r["found"])
         self.assertFalse(r["correct"])
 
+    def test_max_rows_flags_over_capture(self):
+        # Two tables merged into one (more rows than expected) must fail, even though
+        # all expected headers/labels are present and min_rows is satisfied.
+        entry = {**_ENTRY, "max_rows": 6}
+        over = {**_GOOD, "rows": _GOOD["rows"] + [["D14", "99%", "99%", "99%", "99%"]]}
+        r = score_entry(entry, [over])
+        self.assertFalse(r["correct"])
+        self.assertTrue(r["too_many"])
+        self.assertFalse(r["too_few"])
+
+    def test_book_match_scopes_to_the_right_book(self):
+        # Same cells + page in two books; book_match disambiguates (page collides
+        # across books, so this is what prevents matching the wrong book's page).
+        a = {**_GOOD, "_book": "TWILIGHT 2000 PLAYERS MANUAL"}
+        b = {**_GOOD, "_book": "TRAVELLER CORE RULEBOOK 2022"}
+        self.assertIs(_find_table({**_ENTRY, "book_match": "Traveller"}, [a, b]), b)
+        self.assertIs(_find_table({**_ENTRY, "book_match": "Twilight"}, [a, b]), a)
+
     def test_summary_gates_on_non_advisory_only(self):
         results = [
             {"id": "a", "known_broken": True, "correct": False, "found": True},
