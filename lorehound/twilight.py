@@ -65,10 +65,6 @@ class DieOutcome:
         return 0
 
     @property
-    def is_success(self) -> bool:
-        return self.successes >= 1
-
-    @property
     def is_one(self) -> bool:
         return self.value == 1
 

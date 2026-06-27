@@ -91,6 +91,28 @@ def _at_min(rating: str, ladder: list[str]) -> bool:
     return rating == ladder[0]
 
 
+def _raise_attributes(draft, increases: int, id_prefix: str, prompt, *, key="", exclude=None):
+    """Yield ``increases`` CHOICE steps, each raising one attribute a step up the
+    ladder (skipping ones already at A, and the ``exclude``d one). Flags the ``key``
+    attribute in its option label. ``prompt(n, total)`` builds each step's title —
+    the two creation methods word it differently. Shared by the Life Path and
+    Archetype attribute steps."""
+    for n in range(increases):
+        options = [
+            Option(a, f"Raise {a}: {draft.attributes[a]} → "
+                      f"{_step_up(draft.attributes[a], _ATTR_LADDER)}"
+                      + (" (key)" if a == key else ""))
+            for a in ATTRIBUTES
+            if a != exclude and not _at_max(draft.attributes[a], _ATTR_LADDER)
+        ]
+        if not options:
+            break
+        pick = yield Step(
+            f"{id_prefix}{n}", StepKind.CHOICE, prompt(n, increases), options=options,
+        )
+        draft.attributes[pick.value] = _step_up(draft.attributes[pick.value], _ATTR_LADDER)
+
+
 def t2k_flow(ctx):  # -> Flow (generator)
     data: T2KData = ctx.data  # type: ignore[assignment]
     draft = ctx.draft
@@ -196,22 +218,11 @@ def _archetype_attributes(ctx, draft, arch):
         draft.attributes[dropped] = _step_down(BASELINE_ATTR, _ATTR_LADDER)
         increases = 4
         ctx.log(f"Dropped {dropped} to D for a 4th increase.")
-    for n in range(increases):
-        options = [
-            Option(a, f"Raise {a}: {draft.attributes[a]} → "
-                      f"{_step_up(draft.attributes[a], _ATTR_LADDER)}"
-                      + (" (key)" if a == key else ""))
-            for a in ATTRIBUTES
-            if a != dropped and not _at_max(draft.attributes[a], _ATTR_LADDER)
-        ]
-        if not options:
-            break
-        raise_ = yield Step(
-            f"archetype_attr_{n}", StepKind.CHOICE,
-            f"Attribute increase {n + 1} of {increases} (key: {key or 'any'})",
-            options=options,
-        )
-        draft.attributes[raise_.value] = _step_up(draft.attributes[raise_.value], _ATTR_LADDER)
+    yield from _raise_attributes(
+        draft, increases, "archetype_attr_",
+        lambda n, total: f"Attribute increase {n + 1} of {total} (key: {key or 'any'})",
+        key=key, exclude=dropped,
+    )
 
 
 def _archetype_skills(ctx, data: T2KData, draft, arch, known: dict[str, str]):
@@ -247,19 +258,10 @@ def _attributes(ctx, data: T2KData, draft):
     )
     increases = roll.total or 0
     ctx.log(f"Rolled {increases} attribute increases on 2D3.")
-    for n in range(increases):
-        options = [
-            Option(a, f"Raise {a}: {draft.attributes[a]} → {_step_up(draft.attributes[a], _ATTR_LADDER)}")
-            for a in ATTRIBUTES if not _at_max(draft.attributes[a], _ATTR_LADDER)
-        ]
-        if not options:
-            break
-        pick = yield Step(
-            f"attr_raise_{n}", StepKind.CHOICE,
-            f"Attribute increase {n + 1} of {increases}: raise which?",
-            options=options,
-        )
-        draft.attributes[pick.value] = _step_up(draft.attributes[pick.value], _ATTR_LADDER)
+    yield from _raise_attributes(
+        draft, increases, "attr_raise_",
+        lambda n, total: f"Attribute increase {n + 1} of {total}: raise which?",
+    )
 
 
 def _childhood(ctx, data: T2KData, draft, known: dict[str, str]):
