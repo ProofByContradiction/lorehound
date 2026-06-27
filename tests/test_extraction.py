@@ -15,6 +15,7 @@ Live gold:  LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_extraction
 import os
 import unittest
 
+from lorehound.pdf_tables import _recover_trailing_rows
 from scripts.extraction_eval import _find_table, score_entry, summarize
 
 # A faithful little table and a row-dropped copy of it (the D12-row failure mode).
@@ -69,6 +70,64 @@ class TestExtractionScorer(unittest.TestCase):
         self.assertEqual(s["gate_accuracy"], 1.0)        # the advisory miss doesn't gate
         self.assertEqual(s["gated_entries"], 1)
         self.assertEqual(s["advisory_entries"], 1)
+
+
+def _w(x0, y0, x1, y1, text):
+    """A minimal PyMuPDF word tuple (x0, y0, x1, y1, text, block, line, word)."""
+    return (x0, y0, x1, y1, text, 0, 0, 0)
+
+
+class TestTrailingRowRecovery(unittest.TestCase):
+    """``_recover_trailing_rows`` — the fix for the D12 bottom-row drop. Pins the
+    behaviour on synthetic geometry (runs in CI): a clean column-aligned row flush
+    below the grid is recovered; prose, gapped, or sparse content is not."""
+
+    # 3 columns [100,150) [150,200) [200,250); two detected bands → pitch 12.
+    XE = [100.0, 150.0, 200.0, 250.0]
+    YE = [10.0, 22.0, 34.0]
+
+    def _aligned_row(self, ycenter):
+        h = 4.0
+        return [
+            _w(102, ycenter - h, 118, ycenter + h, "D12"),
+            _w(155, ycenter - h, 175, ycenter + h, "88%"),
+            _w(205, ycenter - h, 225, ycenter + h, "93%"),
+        ]
+
+    def test_recovers_flush_aligned_row(self):
+        ye = _recover_trailing_rows(self._aligned_row(39), self.XE, list(self.YE), 1000)
+        self.assertEqual(len(ye), len(self.YE) + 1)   # one row recovered
+        self.assertGreater(ye[-1], self.YE[-1])
+
+    def test_recovers_several_consecutive_rows(self):
+        # Two rows spaced ~one pitch apart: each band lands on a single row.
+        words = self._aligned_row(40) + self._aligned_row(58)
+        ye = _recover_trailing_rows(words, self.XE, list(self.YE), 1000)
+        self.assertEqual(len(ye), len(self.YE) + 2)
+
+    def test_rejects_prose_straddling_a_column_edge(self):
+        # A word crossing the 150 boundary is prose, not a grid cell → no recovery.
+        words = [
+            _w(102, 35, 118, 43, "When"),
+            _w(140, 35, 168, 43, "pushing"),   # straddles x=150
+            _w(205, 35, 225, 43, "reroll"),
+        ]
+        ye = _recover_trailing_rows(words, self.XE, list(self.YE), 1000)
+        self.assertEqual(ye, self.YE)
+
+    def test_ignores_content_past_one_pitch_gap(self):
+        ye = _recover_trailing_rows(self._aligned_row(80), self.XE, list(self.YE), 1000)
+        self.assertEqual(ye, self.YE)            # a blank-row gap stops recovery
+
+    def test_requires_label_column_and_two_filled(self):
+        only_interior = [_w(155, 35, 175, 43, "88%")]   # one non-label column
+        self.assertEqual(
+            _recover_trailing_rows(only_interior, self.XE, list(self.YE), 1000), self.YE
+        )
+
+    def test_stops_at_page_bottom(self):
+        ye = _recover_trailing_rows(self._aligned_row(39), self.XE, list(self.YE), 30)
+        self.assertEqual(ye, self.YE)            # recovered row would fall past page end
 
 
 @unittest.skipUnless(

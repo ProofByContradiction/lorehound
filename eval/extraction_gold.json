@@ -16,8 +16,8 @@
       "expect_headers": ["D6", "D8", "D10", "D12"],
       "expect_row_labels": ["D6", "D8", "D10", "D12"],
       "min_rows": 6,
-      "known_broken": true,
-      "what_was_wrong": "find_tables(strategy=lines) dropped the bottom D12 attribute/skill row (no bottom ruling line). The D6/D8/D10/D12 columns are present but the D12 ROW is missing — captured 5 rows (header + –/D6/D8/D10), should be 6."
+      "known_broken": false,
+      "what_was_wrong": "FIXED (find-tables-lines-v11): find_tables(strategy=lines) dropped the bottom D12 attribute/skill row (no bottom ruling line). The D6/D8/D10/D12 columns are present but the D12 ROW was missing — captured 5 rows, should be 6. The trailing-row recovery pass (pdf_tables._recover_trailing_rows) now restores it: ['D12', '88%', '93%', '96%', '97%']."
     },
     {
       "id": "t2k-chance-of-success-initial",
@@ -28,8 +28,8 @@
       "expect_headers": ["D6", "D8", "D10", "D12"],
       "expect_row_labels": ["D6", "D8", "D10", "D12"],
       "min_rows": 6,
-      "known_broken": true,
-      "what_was_wrong": "Same D12 bottom-row drop as the pushed-roll table on the same page; its extracted title is also garbled ('shows the chance when pushing.')."
+      "known_broken": false,
+      "what_was_wrong": "FIXED (find-tables-lines-v11): same D12 bottom-row drop as the pushed-roll table on the same page (recovered row ['D12', '65%', '74%', '79%', '82%']). Its extracted title is still garbled ('shows the chance when pushing.') — title-only, the rows are now complete."
     },
     {
       "id": "t2k-military-ranks",
