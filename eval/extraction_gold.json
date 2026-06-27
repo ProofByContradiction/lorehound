@@ -4,7 +4,7 @@
     "how_to_score": "Find the cached table by `match_cells` (cell values that identify it; the stated `page` disambiguates when several tables share those cells), then check `expect_headers` against the header row, `expect_row_labels` against the first column of the data rows (include the LAST label to guard the trailing-row drop), `min_rows`, and optional `max_rows`. A table is correct only if all hold. `max_rows` catches OVER-capture (two tables merged into one, stray lines pulled in) that a min-only check would pass.",
     "two_numbers": "summarize() reports `overall_accuracy` over ALL tables (the realistic cross-book picture — known_broken tables count as the failures they are) and `gate_accuracy` over only the known-good tables (the regression guard that exits non-zero below --threshold). When an extraction fix lands, flip `known_broken` to false so the table joins the gate.",
     "local_only": "Reads cache/*.json (the copyrighted books can't live in the repo), so it's a LOCAL guard like scripts/retrieval_eval.py. To validate an extraction fix: re-extract (python -m lorehound.index, or /reindex), then re-run the eval.",
-    "books_covered": ["Twilight 2000 (4E) core", "Traveller (Mongoose 2022) core", "Traveller — Aliens of Charted Space Vol 2 (untuned by our reconstructors; surfaces real failures)"],
+    "books_covered": ["Twilight 2000 (4E) core", "Traveller (Mongoose 2022) core", "Traveller — Aliens of Charted Space Vol 2 (untuned by our reconstructors; surfaces real failures)", "Pathfinder 2e core (a new system + heavy Paizo styling; a deliberate stress test — most tables use shading not ruling lines, so find_tables misses them)"],
     "created": "2026-06-27"
   },
   "entries": [
@@ -246,6 +246,49 @@
       "max_rows": 7,
       "known_broken": true,
       "what_was_wrong": "The 1D Mishaps table and the 2D Events table are MERGED into one 20-row table — the 'EVENTS TABLE' header sits mid-table (it's the match cell that fingerprints the bug). Should be a 7-row Mishaps table; the Events table should be its own entry. (Caught by max_rows.)"
+    },
+    {
+      "id": "pf2e-alignments",
+      "system": "Pathfinder (2e)",
+      "book_match": "PATHFINDER",
+      "page": 30,
+      "title": "Table 1-2: The Nine Alignments",
+      "type": "grid reference",
+      "match_cells": ["Lawful Good (LG)", "Chaotic Evil (CE)"],
+      "expect_headers": ["GOOD", "NEUTRAL", "EVIL"],
+      "expect_row_labels": ["Lawful", "Neutral", "Chaotic"],
+      "min_rows": 4,
+      "max_rows": 4,
+      "known_broken": false,
+      "what_was_wrong": "Known-good 3x3 alignment grid — proof a clean ruled grid extracts fine even in this stylized book."
+    },
+    {
+      "id": "pf2e-ability-modifiers",
+      "system": "Pathfinder (2e)",
+      "book_match": "PATHFINDER",
+      "page": 21,
+      "title": "Table 1-1: Ability Modifiers",
+      "type": "cross-reference lookup",
+      "match_cells": ["10–11 +0 10–11 +0"],
+      "expect_headers": ["ABILITY SCORE", "MODIFIER"],
+      "expect_row_labels": ["1", "24–25"],
+      "min_rows": 7,
+      "known_broken": true,
+      "what_was_wrong": "The book prints this as two side-by-side Score|Modifier halves; extraction merged the halves and DOUBLED every cell ('10–11 +0 10–11 +0'), and kept fi-ligatures ('Modiﬁer'). Should be a clean two-column Ability Score | Modifier table (1 to 24–25)."
+    },
+    {
+      "id": "pf2e-melee-weapons",
+      "system": "Pathfinder (2e)",
+      "book_match": "PATHFINDER",
+      "page": 278,
+      "title": "Table 6-7: Melee Weapons",
+      "type": "weapon stat block",
+      "match_cells": ["Longsword", "Greataxe"],
+      "expect_headers": ["WEAPON", "DAMAGE", "BULK", "HANDS", "GROUP"],
+      "expect_row_labels": ["Dagger", "Longsword", "Greataxe"],
+      "min_rows": 10,
+      "known_broken": true,
+      "what_was_wrong": "NOT CAPTURED AT ALL. find_tables(strategy=lines) sees no ruling lines on Paizo's shaded weapons table, so the entire Melee Weapons table is missing — as are most of the book's equipment/spell tables (tables were extracted from only 26 of 638 pages). The headline stress-test failure; Stage A (ruling-independent table detection) targets exactly this."
     }
   ]
 }
