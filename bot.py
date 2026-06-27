@@ -11,7 +11,11 @@ from discord.ext import commands
 
 from lorehound.config import Config, ConfigError
 from lorehound.drive_client import DriveClient
-from lorehound.rules import RulesService
+from lorehound.rules import ReindexInProgress, RulesService
+
+# How often the bot checks the cache manifest for a standalone-indexer update.
+# A reindex changes data rarely, so 30s latency to pick it up is plenty.
+CACHE_POLL_SECONDS = 30
 
 logging.basicConfig(
     level=logging.INFO,
@@ -122,9 +126,11 @@ class Lorehound(commands.Bot):
                 exc,
             )
 
-        # Warm the rules index in the background if Drive is ready.
+        # Warm the rules index in the background if Drive is ready, then keep
+        # watching the cache so a standalone indexer run hot-reloads us — no restart.
         if self.rules_service.drive is not None:
             asyncio.create_task(self._warm_rules())
+            asyncio.create_task(self._watch_cache())
 
     async def _warm_rules(self) -> None:
         try:
@@ -136,6 +142,47 @@ class Lorehound(commands.Bot):
             )
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not warm rules index: %s", exc)
+
+    async def _watch_cache(self) -> None:
+        """Hot-reload the index when the standalone indexer refreshes the cache.
+
+        Polls the cache manifest's mtime (written by ``python -m lorehound.index`` when
+        a (re)extraction finishes) and, when it advances, rebuilds + atomically swaps
+        the index via ``RulesService.refresh`` — so data/extraction changes go live
+        without a bot restart. The prior index stays queryable until the swap. Only
+        the indexer writes the manifest, so a bot-side warm/``/reindex`` never
+        re-triggers this loop."""
+        drive = self.rules_service.drive
+        manifest = drive.manifest_path if drive else None
+        if manifest is None:
+            return
+
+        def mtime() -> float | None:
+            try:
+                return manifest.stat().st_mtime
+            except OSError:
+                return None
+
+        last = mtime()  # baseline: don't reload for a manifest that predates startup
+        while not self.is_closed():
+            await asyncio.sleep(CACHE_POLL_SECONDS)
+            now = mtime()
+            # No manifest yet, unchanged, or a refresh is already running → wait.
+            if now is None or now == last or self.rules_service.indexing:
+                continue
+            last = now
+            log.info("Cache manifest changed — hot-reloading the rules index…")
+            try:
+                summary = await asyncio.to_thread(self.rules_service.refresh)
+                log.info(
+                    "Hot-reloaded index: %d docs, %d chunks",
+                    summary["documents"],
+                    summary["chunks"],
+                )
+            except ReindexInProgress:
+                last = None  # a refresh slipped in; re-check (and reload) next tick
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Cache hot-reload failed: %s", exc)
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id: %s)", self.user, self.user and self.user.id)
