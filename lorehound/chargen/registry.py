@@ -23,10 +23,10 @@ class SystemChargen:
     # in-flight character stays consistent even if the index is re-built mid-session.
     # Returns the object passed as ChargenContext.data. None → the flow needs no data.
     build_data: Callable[[object, str], object] | None = None
-    # Parse chargen tables that live in a document's prose (not as structured tables)
-    # — runs at index time over each matching doc's text; result merged into
-    # RulesService.chargen_aux[game]. None → this system has no prose tables.
-    extract_prose: Callable[[str], dict] | None = None
+    # Parse chargen tables that live in a document's prose or structured tables —
+    # runs at index time over each matching doc's (text, tables); result merged into
+    # RulesService.chargen_aux[game]. None → this system has no auxiliary chargen data.
+    extract_prose: Callable[[str, list], dict] | None = None
 
     def matches(self, game: str) -> bool:
         g = (game or "").lower()

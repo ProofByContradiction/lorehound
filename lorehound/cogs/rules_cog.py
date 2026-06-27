@@ -293,7 +293,16 @@ async def _share_card(interaction: discord.Interaction, public_card) -> None:
         return
     await interaction.response.defer()  # ack the button press
     try:
-        await channel.send(view=public_card)  # standalone channel message
+        await channel.send(view=public_card)  # standalone channel message (bot is a member)
+    except discord.Forbidden:
+        # User-installed app with no access to this channel (50001 Missing Access) — post
+        # via the interaction webhook instead, which is publicly visible and doesn't
+        # require the bot to be a guild member.
+        try:
+            await interaction.followup.send(view=public_card)
+        except discord.HTTPException as exc:
+            await interaction.followup.send(f"⚠️ Couldn't post that here: {exc}", ephemeral=True)
+            return
     except discord.HTTPException as exc:
         await interaction.followup.send(f"⚠️ Couldn't post that here: {exc}", ephemeral=True)
         return

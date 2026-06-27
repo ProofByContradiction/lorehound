@@ -161,6 +161,9 @@ class ChargenView(discord.ui.LayoutView):
         if summary:
             container.add_item(ui.text(summary))
             container.add_item(ui.separator())
+        roll_line = render.last_roll_line(self.session.history)
+        if roll_line:
+            container.add_item(ui.text(roll_line))
         container.add_item(ui.text(render.step_prompt(step)))
         container.add_item(ui.separator())
         row = discord.ui.ActionRow()

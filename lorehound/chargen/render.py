@@ -58,6 +58,17 @@ def draft_summary(draft: CharacterDraft) -> str:
     return "\n".join(parts)
 
 
+def last_roll_line(history: list) -> str:
+    """A one-line recap of the most recent dice roll, so step-by-step shows what you
+    actually rolled (not just its downstream effect). ``""`` until the first roll."""
+    for result in reversed(history):
+        if result.total is not None:
+            shown = result.detail or result.value
+            tail = f" `{shown}`" if shown and shown != str(result.total) else ""
+            return f"🎲 Last roll:{tail} → **{result.total}**"
+    return ""
+
+
 def step_prompt(step: Step) -> str:
     """The heading + body shown for the step awaiting the user."""
     lines = [f"### {step.prompt}"]
