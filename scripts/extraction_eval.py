@@ -100,10 +100,17 @@ def score_entry(entry: dict, tables: list[dict]) -> dict:
         res.update(correct=False, detail="no cached table matched its match_cells")
         return res
     rows = t.get("rows") or []
-    header = {_norm(c) for c in (rows[0] if rows else [])}
-    labels = {_norm(r[0]) for r in rows[1:] if r}
     exp_headers = [_norm(c) for c in entry.get("expect_headers", [])]
     exp_labels = entry.get("expect_row_labels", [])
+    # The column-header row isn't always row[0] — title / section / "Spell Level"
+    # banner rows can precede it. Check expected headers against whichever row holds
+    # the most of them (row[0] when nothing's expected).
+    if exp_headers:
+        best = max(rows, key=lambda r: sum(h in {_norm(c) for c in r} for h in exp_headers))
+        header = {_norm(c) for c in best}
+    else:
+        header = {_norm(c) for c in (rows[0] if rows else [])}
+    labels = {_norm(r[0]) for r in rows[1:] if r}
     missing_headers = [h for h in exp_headers if h not in header]
     missing_labels = [lbl for lbl in exp_labels if _norm(lbl) not in labels]
     min_rows = int(entry.get("min_rows", 0))
@@ -138,6 +145,13 @@ def summarize(results: list[dict]) -> dict:
     advisory = [r for r in results if r["known_broken"]]
     gated_correct = sum(1 for r in gated if r["correct"])
     overall_correct = sum(1 for r in results if r["correct"])
+    by_system: dict[str, dict] = {}
+    for r in results:
+        s = by_system.setdefault(r.get("system", "?"), {"correct": 0, "total": 0})
+        s["total"] += 1
+        s["correct"] += 1 if r["correct"] else 0
+    for s in by_system.values():
+        s["accuracy"] = s["correct"] / s["total"] if s["total"] else 1.0
     return {
         "gate_accuracy": (gated_correct / len(gated)) if gated else 1.0,
         "gated_entries": len(gated),
@@ -147,6 +161,7 @@ def summarize(results: list[dict]) -> dict:
         "overall_accuracy": (overall_correct / len(results)) if results else 1.0,
         "total_entries": len(results),
         "overall_correct": overall_correct,
+        "by_system": by_system,
     }
 
 
@@ -179,6 +194,9 @@ def _print_report(results: list[dict], summary: dict, threshold: float) -> None:
         f"{s['gated_entries']} entries ({s['gated_correct']} correct); "
         f"{s['advisory_entries']} advisory ({s['advisory_correct']} already correct) —"
     )
+    print("— by system:")
+    for system, st in sorted(s["by_system"].items()):
+        print(f"    {st['accuracy']:.0%}  {st['correct']}/{st['total']}  {system}")
     print(f"  health threshold {threshold:.0%}: {'OK' if s['gate_accuracy'] >= threshold else 'BELOW'}")
 
 
