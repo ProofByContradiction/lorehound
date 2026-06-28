@@ -288,7 +288,37 @@
       "expect_row_labels": ["Longsword", "Maul", "Pick"],
       "min_rows": 10,
       "known_broken": false,
-      "what_was_wrong": "FIXED by Stage A + B. Stage A recovered this table (was missing entirely — Paizo's shaded weapons table has no ruling lines for find_tables/lines). Stage B's geometric reconstruction (picked over text-strategy by the lower fragment score) gives clean columns — Damage/Bulk/Hands/Group are now each their own column (no more 'Bu'/'lk' split), so the header check passes. (p282 Martial Weapons: Longsword 1d8 S Bulk 1, Maul 1d12 B Bulk 2, …)"
+      "what_was_wrong": "FIXED by Stage A + B. Stage A recovered this table (was missing entirely — Paizo's shaded weapons table has no ruling lines for find_tables/lines). Stage B's geometric reconstruction (picked over text-strategy by the lower fragment score) gives clean columns — Damage/Bulk/Hands/Group are now each their own column (no more 'Bu'/'lk' split), so the header check passes. (p282 Martial Weapons: Longsword 1d8 S Bulk 1, Maul 1d12 B Bulk 2, …) Cross-checked vs Archives of Nethys (Longsword 1d8 S, Bulk 1, Hands 1, Group Sword — exact match)."
+    },
+    {
+      "id": "pf2e-simple-weapons",
+      "system": "Pathfinder (2e)",
+      "book_match": "PATHFINDER",
+      "page": 281,
+      "title": "Simple Weapons (Melee)",
+      "type": "weapon stat block",
+      "match_cells": ["Club", "Dagger"],
+      "expect_headers": ["DAMAGE", "BULK", "HANDS", "GROUP"],
+      "expect_row_labels": ["Club", "Dagger"],
+      "min_rows": 10,
+      "known_broken": false,
+      "what_was_wrong": "Recovered by Stage A + B (shaded table). Clean columns: Club 1d6 B / Bulk 1 / Group Club; Dagger 1d4 P / Bulk L / Group Knife. The column header isn't row 0 (an Unarmed/section banner precedes it) — the eval finds the best-matching header row. Cross-checked vs Archives of Nethys.",
+      "external_source": "https://2e.aonprd.com/Weapons.aspx"
+    },
+    {
+      "id": "pf2e-sorcerer-spells-per-day",
+      "system": "Pathfinder (2e)",
+      "book_match": "PATHFINDER",
+      "page": 194,
+      "title": "Table 3-17: Sorcerer Spells Per Day",
+      "type": "spell-slot grid",
+      "match_cells": ["Cantrips", "Spell Level"],
+      "expect_headers": ["LEVEL", "CANTRIPS", "1ST", "2ND", "10TH"],
+      "expect_row_labels": ["1", "2", "20"],
+      "min_rows": 21,
+      "known_broken": false,
+      "what_was_wrong": "Recovered by Stage A + B (shaded grid). Clean 12-column grid: character Level 1-20 × Cantrips + spell levels 1st-10th (level 1 = 5 cantrips, 3 first-level slots; level 3 = 5/4/3). Title and 'Spell Level' banner rows precede the column header (handled by best-row header detection). Cross-checked vs Archives of Nethys (Sorcerer).",
+      "external_source": "https://2e.aonprd.com/Classes.aspx?ID=13"
     }
   ]
 }
