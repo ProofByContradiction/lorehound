@@ -408,17 +408,60 @@ def _shaded_table_regions(page) -> list:
     return regions
 
 
+def _clean_grid(raw: list) -> list[list[str]]:
+    """Strip cells, pad ragged rows, drop empty columns then empty rows."""
+    rows = [[(c or "").strip() for c in r] for r in (raw or []) if r]
+    if not rows:
+        return []
+    nc = max(len(r) for r in rows)
+    rows = [r + [""] * (nc - len(r)) for r in rows]
+    keep = [i for i in range(nc) if any(r[i].strip() for r in rows)]
+    rows = [[r[i] for i in keep] for r in rows]
+    return [r for r in rows if any(c.strip() for c in r)]
+
+
+def _frag_fraction(rows: list[list[str]]) -> float:
+    """Fraction of non-empty cells that start with a lowercase letter — a proxy for
+    column over-segmentation. Clean stat-table cells start uppercase/digit; a column
+    split mid-word (``Bu``/``lk``, ``Wooden``/``shield``) leaves lowercase
+    continuation fragments. Lower is cleaner; used to pick between candidates."""
+    cells = [c for r in rows for c in r if c.strip()]
+    if not cells:
+        return 1.0
+    return sum(1 for c in cells if c[:1].islower()) / len(cells)
+
+
+def _geometric_region_rows(words: list, reg) -> list[list[str]]:
+    """Reconstruct a shaded region's grid from word geometry: cluster word
+    x-positions into column anchors and bucket words into (row-band, column). Gives
+    cleaner columns than the text strategy for stat tables (no ``Bu``/``lk`` splits),
+    but can split a multi-word name cell — so the caller keeps whichever candidate is
+    less fragmented."""
+    sel = [
+        w for w in words
+        if reg.x0 <= w[WORD_X0] < reg.x1 and reg.y0 <= w[WORD_Y0] < reg.y1 and w[WORD_TEXT].strip()
+    ]
+    if len(sel) < 6:
+        return []
+    starts = _trav_col_anchors(sel, gap=18.0, numeric_only=False)
+    if len(starts) < 3:
+        return []
+    return _clean_grid(_trav_band_rows(sel, reg.x0, reg.x1, reg.y0, reg.y1, starts))
+
+
 def _recover_shaded_tables(page, page_no: int, found: list) -> list[dict]:
     """Recover shaded (un-ruled) tables the lines pass misses entirely. For each
-    shaded region not already covered by a lines-detected table, run text-strategy
-    detection *clipped to that region* — so it captures the table, not the surrounding
-    prose (un-clipped text strategy grids the whole page). Leaves ruled books
-    untouched: their tables are found by lines, so the regions overlap and are skipped.
+    shaded region not already covered by a lines-detected table, build two candidate
+    reconstructions — a text-strategy pass *clipped to the region* (so it captures the
+    table, not surrounding prose) and a geometric word-bucketing pass — and keep the
+    less column-fragmented one (Stage B). Leaves ruled books untouched: their tables
+    are found by lines, so the regions overlap and are skipped.
     """
     regions = _shaded_table_regions(page)
     if not regions:
         return []
     covered = [t.bbox for t in found]
+    words = page.get_text("words")
 
     def overlaps(reg) -> bool:
         for x0, y0, x1, y1 in covered:
@@ -430,33 +473,26 @@ def _recover_shaded_tables(page, page_no: int, found: list) -> list[dict]:
     for reg in regions:
         if overlaps(reg):
             continue
+        text_rows = []
         try:
             tabs = page.find_tables(clip=reg, strategy="text").tables
+            if tabs:
+                text_rows = _clean_grid(tabs[0].extract())
         except Exception:  # noqa: BLE001
+            pass
+        geo_rows = _geometric_region_rows(words, reg)
+        # Require >=3 columns: a clipped pass over a shaded *prose* box (e.g. a ship's
+        # description sidebar) yields 2 columns of fragments; genuine shaded stat
+        # tables are wider. (Real 2-col tables are ruled → already found by lines.)
+        cands = [r for r in (geo_rows, text_rows) if len(r) >= 2 and len(r[0]) >= 3]
+        if not cands:
             continue
-        for t in tabs:
-            try:
-                raw = t.extract()
-            except Exception:  # noqa: BLE001
-                continue
-            rows = [[(c or "").strip() for c in r] for r in raw if r]
-            if not rows:
-                continue
-            nc = max(len(r) for r in rows)
-            rows = [r + [""] * (nc - len(r)) for r in rows]
-            keep = [i for i in range(nc) if any(r[i].strip() for r in rows)]
-            rows = [[r[i] for i in keep] for r in rows]
-            rows = [r for r in rows if any(c.strip() for c in r)]
-            # Require >=3 columns: a clipped text-strategy pass over a shaded *prose*
-            # box (e.g. a ship's description sidebar) chops the prose into 2 columns
-            # of fragments; genuine shaded stat tables (weapons, spells-per-day) are
-            # wider. (Real 2-col tables are ruled, so the lines pass already has them.)
-            if len(rows) >= 2 and len(rows[0]) >= 3:
-                out.append({
-                    "page": page_no,
-                    "title": _title(page, reg.x0, reg.y0, reg.x1, reg.y1),
-                    "rows": rows,
-                })
+        rows = min(cands, key=_frag_fraction)  # the cleaner (less-fragmented) candidate
+        out.append({
+            "page": page_no,
+            "title": _title(page, reg.x0, reg.y0, reg.x1, reg.y1),
+            "rows": rows,
+        })
     return out
 
 

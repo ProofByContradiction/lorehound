@@ -15,8 +15,27 @@ Live gold:  LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_extraction
 import os
 import unittest
 
-from lorehound.pdf_tables import _recover_trailing_rows, _shaded_table_regions
+from lorehound.pdf_tables import _frag_fraction, _recover_trailing_rows, _shaded_table_regions
 from scripts.extraction_eval import _find_table, score_entry, summarize
+
+
+class TestFragFraction(unittest.TestCase):
+    """_frag_fraction — the Stage B confidence metric that picks the less
+    column-fragmented of two shaded-table reconstructions (lower = cleaner)."""
+
+    def test_clean_table_scores_low(self):
+        clean = [["Weapon", "Damage", "Bulk"], ["Longsword", "1d8 S", "1"], ["Maul", "1d12 B", "2"]]
+        self.assertLess(_frag_fraction(clean), 0.15)
+
+    def test_over_segmented_scores_higher(self):
+        # column split mid-word leaves lowercase continuation fragments
+        frag = [["Weapon", "Da", "mage", "Bu", "lk"], ["Longsword", "1d8", "atile", "1", "lk"]]
+        self.assertGreater(_frag_fraction(frag), _frag_fraction(
+            [["Weapon", "Damage", "Bulk"], ["Longsword", "1d8 S", "1"]]
+        ))
+
+    def test_empty_is_max(self):
+        self.assertEqual(_frag_fraction([]), 1.0)
 
 
 class _FakePage:
