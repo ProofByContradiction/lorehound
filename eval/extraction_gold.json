@@ -218,34 +218,49 @@
       "what_was_wrong": "Robot stat card: header line + a stat row + SKILLS/ATTACKS/TRAITS/PROGRAMMING label rows."
     },
     {
-      "id": "aliens-career-skills-merged",
+      "id": "aliens-career-skills-a",
       "system": "Traveller — Aliens of Charted Space Vol 2",
       "book_match": "CREATING A DROYNE",
       "page": 135,
       "title": "Career — Skills and Training (Table A)",
       "type": "career skill grid",
-      "match_cells": ["Electronics (comms)", "FIELD AGENT"],
-      "expect_headers": ["PERSONAL DEVELOPMENT", "SERVICE SKILLS", "ADVANCED EDUCATION"],
+      "match_cells": ["Electronics (comms)", "Advocate"],
+      "expect_headers": ["1D", "PERSONAL DEVELOPMENT", "SERVICE SKILLS"],
       "expect_row_labels": ["1", "6"],
       "min_rows": 7,
       "max_rows": 7,
-      "known_broken": true,
-      "what_was_wrong": "Table A (universal skills) and the specialist-skills Table B are MERGED into one 14-row table with a second '1D | FIELD AGENT | ...' header mid-table. The per-system career reconstructor that splits A/B on the Traveller core never fired on this supplement, so the generic find_tables pass ran them together. Should be a 7-row Table A. (Caught by max_rows.)"
+      "known_broken": false,
+      "what_was_wrong": "FIXED. Table A (universal skills) and the specialist-skills Table B were MERGED into one 14-row table (a mid-table '1D | FIELD AGENT | ...' header) because no career reconstructor fires on this supplement. The generic split-stacked-roll-tables pass now separates them at the second die-label header into a clean 7-row Table A."
     },
     {
-      "id": "aliens-leader-mishaps-merged",
+      "id": "aliens-leader-mishaps",
       "system": "Traveller — Aliens of Charted Space Vol 2",
       "book_match": "CREATING A DROYNE",
       "page": 198,
       "title": "Leader — Mishaps",
       "type": "roll-result (1D)",
-      "match_cells": ["EVENTS TABLE"],
+      "match_cells": ["1D", "MISHAP"],
       "expect_headers": ["1D", "MISHAP"],
       "expect_row_labels": ["1", "6"],
       "min_rows": 7,
       "max_rows": 7,
-      "known_broken": true,
-      "what_was_wrong": "The 1D Mishaps table and the 2D Events table are MERGED into one 20-row table — the 'EVENTS TABLE' header sits mid-table (it's the match cell that fingerprints the bug). Should be a 7-row Mishaps table; the Events table should be its own entry. (Caught by max_rows.)"
+      "known_broken": false,
+      "what_was_wrong": "FIXED. The 1D Mishaps and 2D Events tables were MERGED into one 20-row table. The split pass separates them at the '2D | EVENT' header and trims the stray 'EVENTS TABLE' banner, leaving a clean 7-row Mishaps table."
+    },
+    {
+      "id": "aliens-leader-events",
+      "system": "Traveller — Aliens of Charted Space Vol 2",
+      "book_match": "CREATING A DROYNE",
+      "page": 198,
+      "title": "Leader — Events",
+      "type": "roll-result (2D)",
+      "match_cells": ["2D", "EVENT"],
+      "expect_headers": ["2D", "EVENT"],
+      "expect_row_labels": ["2", "12"],
+      "min_rows": 12,
+      "max_rows": 12,
+      "known_broken": false,
+      "what_was_wrong": "The 2D Events half of the merged Mishaps+Events table, now its own clean 12-row table after the split pass (rolls 2-12)."
     },
     {
       "id": "pf2e-alignments",

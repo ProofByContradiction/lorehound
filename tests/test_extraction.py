@@ -20,9 +20,43 @@ from lorehound.pdf_tables import (
     _frag_fraction,
     _recover_trailing_rows,
     _shaded_table_regions,
+    _split_stacked_tables,
     _unroll_repeated_columns,
 )
 from scripts.extraction_eval import _find_table, score_entry, summarize
+
+
+class TestSplitStackedTables(unittest.TestCase):
+    """_split_stacked_tables — separate two roll tables merged into one (the Aliens
+    career Skills A/B and Mishaps/Events fix), without touching non-roll tables."""
+
+    def test_splits_two_roll_tables_at_die_header(self):
+        rows = [["1D", "Personal Development", "Service Skills"]] \
+            + [[str(i), "a", "b"] for i in range(1, 7)] \
+            + [["1D", "FIELD AGENT", "ADMIN"]] \
+            + [[str(i), "c", "d"] for i in range(1, 7)]
+        segs = _split_stacked_tables(rows)
+        self.assertEqual([len(s) for s in segs], [7, 7])
+        self.assertEqual(segs[1][0], ["1D", "FIELD AGENT", "ADMIN"])
+
+    def test_trims_banner_between_mishaps_and_events(self):
+        rows = [["1D", "MISHAP"]] + [[str(i), "x"] for i in range(1, 7)] \
+            + [["", "EVENTS TABLE"], ["2D", "EVENT"]] + [[str(i), "y"] for i in range(2, 13)]
+        segs = _split_stacked_tables(rows)
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(len(segs[0]), 7)               # Mishaps: header + 1-6, banner trimmed
+        self.assertEqual(segs[0][-1][0], "6")
+        self.assertEqual(segs[1][0], ["2D", "EVENT"])   # Events starts at its die header
+
+    def test_noop_on_non_roll_table(self):
+        # A weapon/career card (header isn't a die label) must never be split.
+        rows = [["Weapon", "Damage", "Bulk"], ["Longsword", "1d8 S", "1"],
+                ["Maul", "1d12 B", "2"], ["Dagger", "1d4 P", "L"]]
+        self.assertEqual(_split_stacked_tables(rows), [rows])
+
+    def test_noop_on_single_roll_table(self):
+        rows = [["1D", "Mishap"]] + [[str(i), "x"] for i in range(1, 7)]
+        self.assertEqual(_split_stacked_tables(rows), [rows])
 
 
 class TestDedupeAndUnroll(unittest.TestCase):
