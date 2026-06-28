@@ -370,6 +370,96 @@ def _has_clean_career_card(tables: list[dict]) -> bool:
     return False
 
 
+def _shaded_table_regions(page) -> list:
+    """Clip rects for table regions marked by alternating *shaded row-bands* (filled
+    rectangles) rather than ruling lines — the Paizo/Pathfinder style that
+    ``find_tables(strategy="lines")`` is blind to. Bands (wide, short fills) are
+    clustered by vertical proximity + horizontal overlap; each group of >=2 becomes a
+    region padded up for a header row and down for an un-shaded final row."""
+    import fitz
+
+    try:
+        draws = page.get_drawings()
+    except Exception:  # noqa: BLE001
+        return []
+    bands = [
+        d["rect"] for d in draws
+        if d.get("fill") and d.get("rect") is not None
+        and d["rect"].width > 90 and 3 < d["rect"].height < 28
+    ]
+    if len(bands) < 2:
+        return []
+    bands.sort(key=lambda r: r.y0)
+    groups: list[list] = [[bands[0]]]
+    for b in bands[1:]:
+        last = groups[-1][-1]
+        if b.y0 - last.y1 <= 30 and not (b.x1 < last.x0 - 5 or b.x0 > last.x1 + 5):
+            groups[-1].append(b)
+        else:
+            groups.append([b])
+    regions = []
+    for g in groups:
+        if len(g) < 2:  # need >=2 alternating bands to read as a table
+            continue
+        x0, x1 = min(r.x0 for r in g), max(r.x1 for r in g)
+        y0, y1 = min(r.y0 for r in g), max(r.y1 for r in g)
+        pitch = (y1 - y0) / (len(g) - 1)
+        regions.append(fitz.Rect(x0 - 3, y0 - pitch * 1.6, x1 + 3, y1 + pitch * 1.3))
+    return regions
+
+
+def _recover_shaded_tables(page, page_no: int, found: list) -> list[dict]:
+    """Recover shaded (un-ruled) tables the lines pass misses entirely. For each
+    shaded region not already covered by a lines-detected table, run text-strategy
+    detection *clipped to that region* — so it captures the table, not the surrounding
+    prose (un-clipped text strategy grids the whole page). Leaves ruled books
+    untouched: their tables are found by lines, so the regions overlap and are skipped.
+    """
+    regions = _shaded_table_regions(page)
+    if not regions:
+        return []
+    covered = [t.bbox for t in found]
+
+    def overlaps(reg) -> bool:
+        for x0, y0, x1, y1 in covered:
+            if min(reg.y1, y1) - max(reg.y0, y0) > 4 and min(reg.x1, x1) - max(reg.x0, x0) > 4:
+                return True
+        return False
+
+    out: list[dict] = []
+    for reg in regions:
+        if overlaps(reg):
+            continue
+        try:
+            tabs = page.find_tables(clip=reg, strategy="text").tables
+        except Exception:  # noqa: BLE001
+            continue
+        for t in tabs:
+            try:
+                raw = t.extract()
+            except Exception:  # noqa: BLE001
+                continue
+            rows = [[(c or "").strip() for c in r] for r in raw if r]
+            if not rows:
+                continue
+            nc = max(len(r) for r in rows)
+            rows = [r + [""] * (nc - len(r)) for r in rows]
+            keep = [i for i in range(nc) if any(r[i].strip() for r in rows)]
+            rows = [[r[i] for i in keep] for r in rows]
+            rows = [r for r in rows if any(c.strip() for c in r)]
+            # Require >=3 columns: a clipped text-strategy pass over a shaded *prose*
+            # box (e.g. a ship's description sidebar) chops the prose into 2 columns
+            # of fragments; genuine shaded stat tables (weapons, spells-per-day) are
+            # wider. (Real 2-col tables are ruled, so the lines pass already has them.)
+            if len(rows) >= 2 and len(rows[0]) >= 3:
+                out.append({
+                    "page": page_no,
+                    "title": _title(page, reg.x0, reg.y0, reg.x1, reg.y1),
+                    "rows": rows,
+                })
+    return out
+
+
 def extract_tables(page, page_no: int, profile=None) -> list[dict]:
     """Generic table extraction for one page, plus any source-specific
     reconstructions from ``profile`` (the hybrid indexer — see :mod:`sources`)."""
@@ -436,6 +526,9 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
                         "rows": rows,
                     }
                 )
+    # Ruling-independent fallback: recover shaded (un-ruled) tables — Paizo/Pathfinder
+    # style — that the lines pass is blind to, without disturbing ruled books.
+    out.extend(_recover_shaded_tables(page, page_no, found))
     # Source-specific geometric reconstructions (career grids, gear cards, ship
     # blocks) for layouts the generic pass can't recover; baseline-only otherwise.
     if profile is not None:

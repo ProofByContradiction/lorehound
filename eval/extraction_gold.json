@@ -280,15 +280,15 @@
       "id": "pf2e-melee-weapons",
       "system": "Pathfinder (2e)",
       "book_match": "PATHFINDER",
-      "page": 278,
-      "title": "Table 6-7: Melee Weapons",
+      "page": 282,
+      "title": "Martial Weapons (Equipment)",
       "type": "weapon stat block",
-      "match_cells": ["Longsword", "Greataxe"],
-      "expect_headers": ["WEAPON", "DAMAGE", "BULK", "HANDS", "GROUP"],
-      "expect_row_labels": ["Dagger", "Longsword", "Greataxe"],
+      "match_cells": ["Longsword", "Maul"],
+      "expect_headers": ["DAMAGE", "HANDS", "GROUP", "BULK"],
+      "expect_row_labels": ["Longsword", "Maul", "Pick"],
       "min_rows": 10,
       "known_broken": true,
-      "what_was_wrong": "NOT CAPTURED AT ALL. find_tables(strategy=lines) sees no ruling lines on Paizo's shaded weapons table, so the entire Melee Weapons table is missing — as are most of the book's equipment/spell tables (tables were extracted from only 26 of 638 pages). The headline stress-test failure; Stage A (ruling-independent table detection) targets exactly this."
+      "what_was_wrong": "Stage A RECOVERED this — it was missing entirely (find_tables/lines sees no ruling lines on Paizo's shaded tables). The shaded-table fallback now captures it (Longsword 1d8 S, Maul 1d12 B, Pick, Ranseur…). Still known_broken because the text strategy OVER-SEGMENTS columns (BULK split into 'Bu'/'lk', the Weapon Traits column fragmented), so the header check fails. Stage B (confidence + targeted second pass) refines column detection. This is the page where Longsword actually lives (p282 Equipment, not the p278 shields)."
     }
   ]
 }
