@@ -496,6 +496,64 @@ def _recover_shaded_tables(page, page_no: int, found: list) -> list[dict]:
     return out
 
 
+# A roll-index header cell: '1D', '2D', 'D6', '2D6', 'D100' — requires a digit so a
+# bare 'D' data value (e.g. a T2K reliability rating) isn't mistaken for a header.
+_DIE_HEADER = re.compile(r"\d+[dD]\d*|[dD]\d+")
+
+
+def _is_roll_row(r: list[str]) -> bool:
+    """A roll-indexed data row: first cell is a roll result like '1', '12' or '2–3'."""
+    return bool(r) and bool(re.fullmatch(r"\d{1,2}([–-]\d{1,2})?", (r[0] or "").strip()))
+
+
+def _split_stacked_tables(rows: list[list[str]]) -> list[list[list[str]]]:
+    """Split a *roll table* that is really several stacked together. find_tables merges
+    two adjacent roll tables (e.g. a Traveller career's Skills Table A + specialist
+    Table B, or its Mishaps + Events) when no per-system reconstructor fires. We only
+    touch tables whose header's first cell is a die label ('1D'/'2D'/'D6'), and split
+    at each mid-table die-label header, trimming trailing non-roll rows (a stray
+    'EVENTS TABLE' banner). This deliberately ignores non-roll tables (weapon/career
+    cards, equipment) so it can't shred them. ``[rows]`` when nothing splits."""
+    if len(rows) < 4 or not rows[0] or not _DIE_HEADER.fullmatch((rows[0][0] or "").strip()):
+        return [rows]
+
+    def is_header(r: list[str], i: int) -> bool:
+        if i == 0:
+            return False
+        rest = [c.strip() for c in r[1:] if c.strip()]
+        return (
+            bool(_DIE_HEADER.fullmatch((r[0] or "").strip()))
+            and bool(rest) and all(len(c) <= 25 for c in rest)
+            and any(any(ch.isalpha() for ch in c) for c in rest)
+        )
+
+    bounds = [0] + [i for i, r in enumerate(rows) if is_header(r, i)] + [len(rows)]
+    segs = []
+    for a, b in zip(bounds, bounds[1:], strict=False):
+        seg = rows[a:b]
+        while len(seg) > 1 and not _is_roll_row(seg[-1]):  # trim trailing banners/junk
+            seg = seg[:-1]
+        if len(seg) >= 2:
+            segs.append(seg)
+    return segs if len(segs) > 1 else [rows]
+
+
+def _split_table_dict(t: dict) -> list[dict]:
+    """Apply :func:`_split_stacked_tables` to a table dict, fanning it out into one
+    dict per recovered sub-table. The first sub-table keeps the parent title; later
+    ones derive theirs from their own header's label column (so the Events half of a
+    Mishaps+Events table isn't left titled 'MISHAPS TABLE')."""
+    segs = _split_stacked_tables(t.get("rows") or [])
+    if len(segs) == 1:
+        return [t]
+    out = [{**t, "rows": segs[0]}]
+    for s in segs[1:]:
+        label = s[0][1].strip() if len(s[0]) >= 2 else ""
+        title = label.title() if label else t.get("title", "")
+        out.append({**t, "title": title, "rows": s})
+    return out
+
+
 def _dedupe_words(words: list) -> list:
     """Drop words rendered twice at the same spot. Some PDFs double-strike text for
     faux-bold, so get_text returns each word twice — e.g. the Pathfinder ability-
@@ -643,7 +701,9 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
     # blocks) for layouts the generic pass can't recover; baseline-only otherwise.
     if profile is not None:
         out.extend(profile.reconstruct(page, page_no, out))
-    return out
+    # Split any two-tables-merged-into-one (a mid-table secondary header), e.g. a
+    # career's Skills A/B or Mishaps/Events on books with no career reconstructor.
+    return [sub for t in out for sub in _split_table_dict(t)]
 
 
 def _t2k_careers(page, page_no, existing) -> list[dict]:
