@@ -22,7 +22,7 @@ from discord.ext import commands
 
 from .. import ui
 from ..rules import ReindexInProgress, RulesService, table_topic
-from ..search_index import Chunk, SearchHit, tokenize
+from ..search_index import Chunk, SearchHit, name_match_score
 from ..tables import _name_col, render_item, render_table
 from ..text_utils import clean_grid
 
@@ -87,20 +87,29 @@ def _badge(category: str) -> str:
 def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
     """Expand catalog tables (weapon/vehicle lists) into one pickable entry per item
     row — so a wide table becomes a name pick-list, each resolving to a Stat|Value
-    card. Each entry is scored by how well its name matches the query, so a uniquely
-    named lookup floats to the top (and opens directly). Non-table hits pass through."""
-    q_tokens = set(tokenize(query))
-    out: list[SearchHit] = []
+    card. Each entry is scored by name overlap with the query. Non-catalog hits (prose,
+    rules tables, single-item stat blocks) pass through but are normalized into [0, 0.5]
+    so a mere mention can never outrank a real item card (a BM25 prose hit can score
+    20+, which used to bury the fractional row scores). Highest-first."""
+    exploded: list[SearchHit] = []
+    passthrough: list[SearchHit] = []
     seen: set[tuple] = set()
     for h in hits:
         rows = clean_grid(h.chunk.rows or [])
-        # Only explode genuine stat catalogs (multi-row, several columns); leave
-        # narrow rules/feature tables as normal hits so they don't pollute the list.
-        if len(rows) < 3 or len(rows[0]) < 4:
-            out.append(h)
+        name_col = _name_col(rows) if rows else 0
+        # Distinct item-like names in the name column: a real catalog has ≥2; a
+        # single-item stat block (T2K weapon card — name in the title, not a column)
+        # yields ≤1, so it passes through and renders whole instead of being shredded.
+        catalog_names = {
+            v.lower() for r in rows[1:]
+            if name_col < len(r) and (v := r[name_col].strip())
+            and any(ch.isalpha() for ch in v)
+            and not (v.replace(" ", "").isalpha() and v.isupper())
+        }
+        if len(rows) < 3 or len(rows[0]) < 4 or len(catalog_names) < 2:
+            passthrough.append(h)
             continue
         header = rows[0]
-        name_col = _name_col(rows)
         table = h.chunk.section.split("›")[-1].strip()
         for row in rows[1:]:
             # Normalize away trailing footnote markers ("BMP-1*" == "BMP-1") so the
@@ -112,9 +121,8 @@ def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
             if key in seen:
                 continue
             seen.add(key)
-            name_tokens = set(tokenize(name))
-            score = (len(q_tokens & name_tokens) / len(q_tokens)) if q_tokens else 0.0
-            out.append(SearchHit(
+            score = name_match_score(query, name)
+            exploded.append(SearchHit(
                 chunk=Chunk(
                     game=h.chunk.game, source=h.chunk.source, category=h.chunk.category,
                     section=f"{table} › {name}" if table else name,
@@ -122,7 +130,25 @@ def _explode_to_items(hits: list[SearchHit], query: str) -> list[SearchHit]:
                 ),
                 score=score,
             ))
+    if passthrough:
+        top = max((h.score for h in passthrough), default=0.0) or 1.0
+        passthrough = [SearchHit(chunk=h.chunk, score=0.5 * h.score / top) for h in passthrough]
+    out = exploded + passthrough
     out.sort(key=lambda x: x.score, reverse=True)
+    return out
+
+
+def _merge_item_hits(direct: list[SearchHit], exploded: list[SearchHit]) -> list[SearchHit]:
+    """Merge directly-resolved catalog cards with explode/passthrough hits, dropping
+    duplicates of the same item (same book + name), keeping the higher score."""
+    out: list[SearchHit] = []
+    seen: set[tuple] = set()
+    for h in sorted([*direct, *exploded], key=lambda x: x.score, reverse=True):
+        key = (h.chunk.source, h.chunk.section.split("›")[-1].strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
     return out
 
 
@@ -577,12 +603,16 @@ class RulesCog(commands.Cog):
             )
             emoji, label = _meta(category)
             badges = False
-            if category in ("items", "transport") and hits:
-                # A weapon/vehicle catalog is a list of items, not one wide grid:
-                # explode it into a per-item pick-list → Stat|Value cards. A single
-                # clearly-named match opens its card directly.
-                hits = _explode_to_items(hits, query)[:25]
-                if sum(1 for h in hits if h.score >= 0.6) == 1 and hits[0].score >= 0.6:
+            if category in ("items", "transport"):
+                # A weapon/vehicle catalog is a list of items, not one wide grid.
+                # Resolve the item name straight to its card (BM25 can't surface one
+                # row of a long catalog), then merge in exploded/prose hits as the
+                # free-text fallback. A single clearly-named match opens directly.
+                direct = self.rules.catalog_card_lookup(
+                    game, category, query, book=chosen_book
+                )
+                hits = _merge_item_hits(direct, _explode_to_items(hits, query))[:25]
+                if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
                     selected = 0
         scope = f"**{game}**" + (f" › **{chosen_book}**" if chosen_book else "")
         if not hits:

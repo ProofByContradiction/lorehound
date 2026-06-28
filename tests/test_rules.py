@@ -272,6 +272,108 @@ class TestExplodeToItems(unittest.TestCase):
         # …but a real gear chapter is still items.
         self.assertEqual(_category("Core.pdf", "Weapons, Vehicles & Gear", "US Weapons"), "items")
 
+    def test_single_item_statblock_passes_through_not_shredded(self):
+        # A T2K-style weapon card: the name is the *title*, the rows are stat pairs —
+        # the name column yields ≤1 item, so it must NOT be exploded into "Pistol"…
+        from lorehound.cogs.rules_cog import _explode_to_items
+        from lorehound.search_index import Chunk, SearchHit
+
+        card = Chunk("T2K", "Core", "items", "Weapons › M1911A1", "p. 99", "x",
+                     rows=[["TYPE", "AMMO", "REL", "ROF"], ["Pistol", ".45", "5", "2"],
+                           ["BLAST", "RANGE", "MAG", "ARMOR"], ["–", "2", "7", "+1"]])
+        out = _explode_to_items([SearchHit(chunk=card, score=18.0)], "M1911A1")
+        self.assertEqual(len(out), 1)                       # one whole-table hit
+        self.assertEqual(out[0].chunk.section, "Weapons › M1911A1")
+
+    def test_passthrough_normalized_below_item_cards(self):
+        # A prose hit (BM25 ~20) must be scaled into [0, 0.5] so it can't outrank a
+        # real exploded item card (≤1.0) or auto-open on its own.
+        from lorehound.cogs.rules_cog import _explode_to_items
+        from lorehound.search_index import Chunk, SearchHit
+
+        prose = Chunk("TRAV", "CSC", "items", "Weaponry › BROADSWORD", "p. 135", "flavor")
+        out = _explode_to_items([SearchHit(chunk=prose, score=20.5)], "Broadsword")
+        self.assertEqual(len(out), 1)
+        self.assertLessEqual(out[0].score, 0.5)
+
+
+class TestCatalogCards(unittest.TestCase):
+    """The catalog item-row index + direct lookup (/item retrieval fix): an item
+    name resolves straight to its card, since BM25 buries one row of a long catalog."""
+
+    def _multi(self):  # Traveller/PF-style multi-item weapon catalog
+        return Chunk("TRAV", "CSC", "items", "Weaponry › Melee", "p. 136", "x",
+                     rows=[["WEAPON", "TL", "RANGE", "DAMAGE"],
+                           ["Broadsword", "1", "Melee", "4D"],
+                           ["Blade", "1", "Melee", "2D"],
+                           ["Psi Blade", "16", "Melee", "3D"]])
+
+    def _single(self):  # T2K-style single-item stat block (name in the title)
+        return Chunk("T2K", "Core", "items", "Weapons › M1911A1", "p. 99", "x",
+                     rows=[["TYPE", "AMMO", "REL", "ROF"], ["Pistol", ".45", "5", "2"],
+                           ["BLAST", "RANGE", "MAG", "ARMOR"], ["–", "2", "7", "+1"]])
+
+    def test_name_match_score_scale(self):
+        from lorehound.search_index import name_match_score
+
+        self.assertEqual(name_match_score("Broadsword", "Broadsword"), 1.0)
+        self.assertEqual(name_match_score("blade", "Psi Blade"), 0.7)   # sub-phrase
+        # partial: shares a token but neither is a sub-phrase of the other
+        self.assertLess(name_match_score("Battle Axe", "Great Axe"), 0.6)
+        self.assertGreater(name_match_score("Battle Axe", "Great Axe"), 0.0)
+        self.assertEqual(name_match_score("foo", "Bar Baz"), 0.0)       # disjoint
+
+    def test_multi_item_catalog_yields_per_row_cards(self):
+        from lorehound.rules import _build_catalog_cards
+
+        cards = _build_catalog_cards([self._multi()])[("TRAV", "items")]
+        names = {n for n, _ in cards}
+        self.assertEqual(names, {"Broadsword", "Blade", "Psi Blade"})
+        bs = next(c for n, c in cards if n == "Broadsword")
+        self.assertEqual(bs.rows, [["WEAPON", "TL", "RANGE", "DAMAGE"],
+                                   ["Broadsword", "1", "Melee", "4D"]])
+
+    def test_single_item_card_named_by_title_whole_table(self):
+        from lorehound.rules import _build_catalog_cards
+
+        cards = _build_catalog_cards([self._single()])[("T2K", "items")]
+        self.assertEqual([n for n, _ in cards], ["M1911A1"])    # not "Pistol"
+        self.assertEqual(len(cards[0][1].rows), 4)             # whole stat block
+
+    def test_lookup_resolves_name_to_card(self):
+        from lorehound.rules import RulesService, _build_catalog_cards
+
+        rs = RulesService(None)
+        rs._catalog_cards = _build_catalog_cards([self._multi(), self._single()])
+        hit = rs.catalog_card_lookup("TRAV", "items", "Broadsword")[0]
+        self.assertEqual(hit.score, 1.0)
+        self.assertIn("Broadsword", hit.chunk.section)
+        # exact title match in the other book/system resolves too
+        self.assertEqual(rs.catalog_card_lookup("T2K", "items", "M1911A1")[0].score, 1.0)
+        # an ambiguous stem stays a sub-phrase match (won't auto-open)
+        blade = rs.catalog_card_lookup("TRAV", "items", "blade")
+        self.assertEqual(max(h.score for h in blade), 1.0)     # exact "Blade"
+        self.assertTrue(any(h.score == 0.7 for h in blade))    # "Psi Blade"
+
+    def test_card_title_lenient_where_catalog_name_strict(self):
+        from lorehound.rules import _is_card_title
+
+        self.assertTrue(_is_card_title("M1911A1"))             # 4-digit serial guard n/a
+        self.assertTrue(_is_card_title("Gauss Rifle"))
+        self.assertFalse(_is_card_title("You suffer 2 points."))
+        self.assertFalse(_is_card_title("50%"))
+
+    def test_merge_dedupes_keeping_higher_score(self):
+        from lorehound.cogs.rules_cog import _merge_item_hits
+        from lorehound.search_index import Chunk, SearchHit
+
+        c = Chunk("TRAV", "CSC", "items", "Melee › Broadsword", "p. 136", "x")
+        direct = [SearchHit(chunk=c, score=1.0)]
+        exploded = [SearchHit(chunk=c, score=0.5)]
+        out = _merge_item_hits(direct, exploded)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].score, 1.0)
+
 
 class TestPostClassificationStages(unittest.TestCase):
     """The post-build refinement is three ordered, named stages; the order is
