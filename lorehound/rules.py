@@ -14,7 +14,7 @@ import threading
 
 from .careers import Career, assemble_career, detect_careers
 from .drive_client import DriveClient
-from .search_index import Chunk, SearchHit, SearchIndex
+from .search_index import Chunk, SearchHit, SearchIndex, name_match_score, tokenize
 
 
 class ReindexInProgress(RuntimeError):
@@ -536,6 +536,79 @@ def _build_catalog_names(chunks: list[Chunk]) -> dict[tuple[str, str], list[str]
     return {k: sorted(v.values()) for k, v in names.items()}
 
 
+def _is_card_title(s: str) -> bool:
+    """A table title that reads like a single item's name (T2K ``M1911A1``) — lenient
+    where :func:`_is_catalog_name` is strict, since a #66-curated title isn't a catalog
+    *row* value, so the cost-serial / leading-digit guards don't apply. Still rejects
+    sentences, percentages and trailing-period prose."""
+    s = s.strip()
+    if not (2 <= len(s) <= 40) or s.endswith(".") or "%" in s:
+        return False
+    if not any(ch.isalpha() for ch in s) or len(s.split()) > 8:
+        return False
+    low = s.lower()
+    return not any(w in low for w in ("suffer", "reduced by", "destroyed", "checks to", " takes "))
+
+
+def _catalog_cards_for_chunk(c: Chunk):
+    """Yield ``(name, rows)`` renderable single-item cards from a catalog/stat-block
+    chunk, so an item name can be resolved straight to its card (BM25 buries a single
+    item among a 26-row catalog below the relevance floor — see /item retrieval bug).
+
+    Two shapes: a *multi-item catalog* (≥2 distinct item names in the name column,
+    e.g. Traveller/Pathfinder weapon lists) yields one ``(name, [header, row])`` per
+    row; a *single-item card* (the name lives in the title, not a column — Traveller
+    ship stat blocks and T2K weapon cards) yields one ``(title-leaf, whole-table)``."""
+    from .tables import _name_col, is_ship_statblock
+
+    rows = [[(x or "").strip() for x in r] for r in (c.rows or [])
+            if any((x or "").strip() for x in r)]
+    leaf = c.section.split("›")[-1].strip()
+
+    def _single():
+        return [(leaf, c.rows)] if _is_card_title(leaf) else []
+
+    if not rows or is_ship_statblock(rows) or len(rows) < 3 or len(rows[0]) < 4:
+        yield from _single()
+        return
+    nc = _name_col(rows)
+    header = rows[0]
+    items: list[tuple[str, list[str]]] = []
+    for r in rows[1:]:
+        name = (r[nc].strip().rstrip(" *†‡").strip()) if nc < len(r) else ""
+        name = re.sub(r"(\w)- (\w)", r"\1\2", name)  # de-hyphenate "Chal- lenger"
+        if not _is_catalog_name(name) or (name.replace(" ", "").isalpha() and name.isupper()):
+            continue
+        items.append((name, r))
+    if len({n.lower() for n, _ in items}) >= 2:
+        for name, r in items:
+            yield name, [header, r]          # genuine multi-item catalog
+    else:
+        yield from _single()                 # single-item stat block named by its title
+
+
+def _build_catalog_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tuple[str, Chunk]]]:
+    """Per (game, category) list of ``(name, card_chunk)`` for every catalog item, so
+    /item and /transport can resolve an item name directly to its Stat|Value card
+    instead of relying on BM25 (which can't surface a single row of a long catalog)."""
+    from collections import defaultdict
+
+    out: dict[tuple[str, str], dict[str, tuple[str, Chunk]]] = defaultdict(dict)
+    for c in chunks:
+        if c.category not in ("items", "transport") or not c.rows:
+            continue
+        leaf = c.section.split("›")[-1].strip()
+        for name, rows in _catalog_cards_for_chunk(c):
+            whole = rows is c.rows
+            card = Chunk(
+                game=c.game, source=c.source, category=c.category,
+                section=c.section if whole else f"{leaf} › {name}",
+                locator=c.locator, text=name, rows=rows,
+            )
+            out[(c.game, c.category)].setdefault(name.lower(), (name, card))
+    return {k: list(v.values()) for k, v in out.items()}
+
+
 class RulesService:
     def __init__(self, drive: DriveClient | None) -> None:
         self.drive = drive
@@ -545,6 +618,9 @@ class RulesService:
         self.careers: dict[str, dict[str, Career]] = {}
         # Catalog item names per (game, category) for /item and /transport pickers.
         self._catalog: dict[tuple[str, str], list[str]] = {}
+        # Renderable per-item cards per (game, category), so /item resolves a name
+        # straight to its stat card (BM25 can't surface one row of a long catalog).
+        self._catalog_cards: dict[tuple[str, str], list[tuple[str, Chunk]]] = {}
         # Per-game chargen aux data parsed from document prose at index time (e.g.
         # the T2K childhood table), for flows that need tables find_tables can't see.
         self.chargen_aux: dict[str, dict] = {}
@@ -606,11 +682,13 @@ class RulesService:
             index.build(chunks)
             careers = detect_careers(chunks)
             catalog = _build_catalog_names(chunks)
+            catalog_cards = _build_catalog_cards(chunks)
             # Atomic swap: reference assignment is safe under the GIL, so a reader on
             # the event-loop thread sees the old index until this point, then the new.
             self.index = index
             self.careers = careers
             self._catalog = catalog
+            self._catalog_cards = catalog_cards
             self.chargen_aux = aux
             return {
                 "documents": len(docs),
@@ -625,6 +703,25 @@ class RulesService:
     def catalog_names(self, game: str, category: str) -> list[str]:
         """Sorted item names for a game's weapon/vehicle catalogs (autocomplete)."""
         return self._catalog.get((game, category), [])
+
+    def catalog_card_lookup(
+        self, game: str, category: str, query: str, book: str | None = None
+    ) -> list[SearchHit]:
+        """Resolve an item name directly to its catalog card(s), bypassing BM25.
+
+        Cards are scored by :func:`name_match_score` (the same scale the explode
+        fallback uses) and returned highest-first; non-matches are dropped."""
+        if not tokenize(query):
+            return []
+        out: list[SearchHit] = []
+        for name, card in self._catalog_cards.get((game, category), []):
+            if book and card.source != book:
+                continue
+            score = name_match_score(query, name)
+            if score > 0:
+                out.append(SearchHit(chunk=card, score=score))
+        out.sort(key=lambda h: h.score, reverse=True)
+        return out
 
     def search(
         self,

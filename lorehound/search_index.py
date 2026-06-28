@@ -46,6 +46,25 @@ def tokenize(text: str) -> list[str]:
     return [_stem(t) for t in _WORD_RE.findall(text.lower())]
 
 
+def name_match_score(query: str, name: str) -> float:
+    """How well an item NAME matches a query, on a single [0, 1] scale shared by the
+    catalog-card lookup and the explode fallback so they rank consistently: an exact
+    name is 1.0; a query that is a sub-phrase of the name (``blade`` → ``Psi Blade``)
+    is 0.7; otherwise a token-overlap fraction capped below 0.6 (so a partial shows in
+    the pick-list but never auto-opens). 0.0 when disjoint."""
+    q = tokenize(query)
+    nt = tokenize(name)
+    qset, nset = set(q), set(nt)
+    if not qset or not nset:
+        return 0.0
+    if q == nt:
+        return 1.0
+    if qset <= nset:
+        return 0.7
+    inter = len(qset & nset)
+    return 0.6 * inter / len(qset | nset) if inter else 0.0
+
+
 @dataclass
 class Chunk:
     game: str            # e.g. "Twilight: 2000"
