@@ -21,6 +21,7 @@ from lorehound.pdf_tables import (
     _recover_trailing_rows,
     _shaded_table_regions,
     _split_stacked_tables,
+    _title,
     _unroll_repeated_columns,
 )
 from scripts.extraction_eval import _find_table, score_entry, summarize
@@ -138,6 +139,62 @@ class TestShadedTableRegions(unittest.TestCase):
     def test_narrow_bands_ignored(self):
         narrow = [self._rect(70, 640, 120, 652), self._rect(70, 664, 120, 676)]
         self.assertEqual(_shaded_table_regions(_FakePage(narrow)), [])
+
+
+class _FakeTextPage:
+    """Minimal stand-in exposing get_text('dict') for the card-title test.
+    Each input line is (x0, y0, x1, y1, text, size); one line per block."""
+
+    def __init__(self, lines):
+        self._lines = lines
+
+    def get_text(self, _kind):
+        return {"blocks": [
+            {"lines": [{"bbox": (x0, y0, x1, y1),
+                        "spans": [{"text": text, "size": size}]}]}
+            for (x0, y0, x1, y1, text, size) in self._lines
+        ]}
+
+
+class TestCardTitle(unittest.TestCase):
+    """_title (#66) — name a stat card by the entry-NAME heading above its flavor
+    paragraph, not by the nearest line (which is the flavor). Size-only logic."""
+
+    def test_picks_name_above_flavor(self):
+        # weapon card: NAME (size 10) over a long flavor paragraph (size 8 = body),
+        # the flavor being the line nearest the table.
+        page = _FakeTextPage([
+            (100, 100, 160, 112, "M1911A1", 10.0),
+            (100, 170, 400, 192, "A reliable .45 sidearm carried for decades. " * 2, 8.0),
+        ])
+        self.assertEqual(_title(page, 100, 200, 300, 280), "M1911A1")
+
+    def test_real_heading_just_above_wins(self):
+        # A genuine heading flush above the table is used directly.
+        page = _FakeTextPage([
+            (100, 50, 400, 60, "body text " * 6, 8.0),
+            (100, 182, 200, 196, "MINES", 11.0),
+        ])
+        self.assertEqual(_title(page, 100, 200, 300, 280), "MINES")
+
+    def test_column_overlap_keeps_cards_apart(self):
+        # Two side-by-side cards: the right table must not steal the left name.
+        page = _FakeTextPage([
+            (70, 100, 120, 112, "M249", 10.0),                  # left column name
+            (320, 100, 380, 112, "M240B", 10.0),               # right column name
+            (300, 170, 520, 192, "A belt-fed machine gun. " * 2, 8.0),
+        ])
+        self.assertEqual(_title(page, 300, 200, 520, 280), "M240B")
+
+    def test_running_title_in_top_margin_ignored(self):
+        # A larger-than-body line in the page's top margin (y < 64) is the running
+        # title, not an entry name — fall back to the nearest line instead.
+        page = _FakeTextPage([
+            (100, 40, 300, 58, "US MILITARY WEAPONS", 12.0),   # running header
+            (100, 180, 400, 196, "the only line near the table", 8.0),
+        ])
+        self.assertEqual(_title(page, 100, 200, 300, 280), "the only line near the table")
+
 
 # A faithful little table and a row-dropped copy of it (the D12-row failure mode).
 _GOOD = {"page": 48, "title": "Chance of Success", "rows": [
