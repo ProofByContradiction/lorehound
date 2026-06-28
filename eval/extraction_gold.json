@@ -269,12 +269,13 @@
       "page": 21,
       "title": "Table 1-1: Ability Modifiers",
       "type": "cross-reference lookup",
-      "match_cells": ["10–11 +0 10–11 +0"],
+      "match_cells": ["10–11", "+0"],
       "expect_headers": ["ABILITY SCORE", "MODIFIER"],
       "expect_row_labels": ["1", "24–25"],
-      "min_rows": 7,
-      "known_broken": true,
-      "what_was_wrong": "The book prints this as two side-by-side Score|Modifier halves; extraction merged the halves and DOUBLED every cell ('10–11 +0 10–11 +0'), and kept fi-ligatures ('Modiﬁer'). Should be a clean two-column Ability Score | Modifier table (1 to 24–25)."
+      "min_rows": 13,
+      "known_broken": false,
+      "what_was_wrong": "FIXED. The book prints this as two side-by-side Score|Modifier halves, double-struck for faux-bold — so extraction read every cell twice ('10–11 +0 10–11 +0'). Fix: de-dup same-position words, then detect the repeated column group and unroll the two halves into one clean Ability Score | Modifier table (1 to 24–25). Values match the official PF2e progression (floor((score-10)/2): 10→+0, 24-25→+7), confirmed via Archives of Nethys.",
+      "external_source": "https://2e.aonprd.com/Rules.aspx?ID=77"
     },
     {
       "id": "pf2e-melee-weapons",
