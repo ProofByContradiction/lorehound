@@ -119,62 +119,41 @@ def _page_body_size(page) -> float:
     return body
 
 
-def _page_heading_fonts(page) -> set:
-    """Fonts used by lines clearly larger than the body text — the page's heading
-    fonts. Entry names sometimes match the *body size* but keep this distinct font
-    (e.g. the Pathfinder/T2K weapon names in GTEestiText-Medium at body size on a
-    page whose body is also that size), so the font catches what size alone misses."""
-    cached = getattr(page, "_lh_hfonts", None)
-    if cached is not None:
-        return cached
-    body = _page_body_size(page)
-    fonts: set = set()
-    for b in page.get_text("dict").get("blocks", []):
-        for ln in b.get("lines", []):
-            spans = ln.get("spans", [])
-            if not "".join(s["text"] for s in spans).strip():
-                continue
-            big = max(spans, key=lambda s: s["size"])
-            if big["size"] > body + 0.5:
-                fonts.add(big["font"])
-    try:
-        page._lh_hfonts = fonts
-    except Exception:  # noqa: BLE001
-        pass
-    return fonts
-
-
 def _title(page, x0: float, y0: float, x1: float, y1: float) -> str:
     """The table's title. Normally the heading line just above it — but weapon/gear
     stat cards put the item NAME in a heading font *above* a flavor paragraph, so the
     nearest line is the flavor, not the name. So: if the line immediately above is
-    itself a heading (larger than body, or in a heading font) use it; otherwise look
-    up to ~120pt for the nearest *entry heading* — a short line that is larger than
-    body OR in a heading font, and horizontally overlaps this table's column. The
-    column check keeps a 2-column page's left/right cards from taking each other's
-    name; the top-margin cutoff drops the page running-title."""
+    itself a heading (larger than the page body text) use it; otherwise look up to
+    ~120pt for the nearest *entry heading* — a short, larger-than-body line that
+    horizontally overlaps this table's column. The column check keeps a 2-column
+    page's left/right cards from taking each other's name; the top-margin cutoff drops
+    the page running-title.
+
+    A font-based discriminator (to catch names rendered at the body *size* but in a
+    distinct heading font, e.g. some Soviet weapons on T2K p103) is deferred — it
+    regressed pages where size alone already worked (#66 option (b))."""
     body = _page_body_size(page)
-    hfonts = _page_heading_fonts(page)
-    near = None       # (is_heading, text, bottom_y) — nearest line in the 34pt window
-    entry = None      # (bottom_y, text) — nearest entry heading within ~120pt
+    near = None   # (size, text, bottom_y) — nearest line in the 34pt window (orig logic)
+    entry = None  # (bottom_y, text) — nearest entry heading within ~120pt
     for block in page.get_text("dict")["blocks"]:
         for line in block.get("lines", []):
             lb = line["bbox"]
             text = "".join(s["text"] for s in line["spans"]).strip()
             if not text:
                 continue
-            big = max(line["spans"], key=lambda s: s["size"])
-            is_heading = big["size"] > body + 0.5 or big["font"] in hfonts
+            size = max((s["size"] for s in line["spans"]), default=0.0)
             cx = (lb[0] + lb[2]) / 2
             if y0 - 34 <= lb[3] <= y0 + 1 and x0 - 2 <= cx <= x1 + 2:
-                if near is None or (is_heading and not near[0]) or lb[3] > near[2]:
-                    near = (is_heading, text, lb[3])
+                if near is None or size > near[0] + 0.5 or (
+                    abs(size - near[0]) <= 0.5 and lb[3] > near[2]
+                ):
+                    near = (size, text, lb[3])
             if (
-                is_heading and lb[3] <= y0 + 1 and y0 - lb[3] < 120
-                and lb[0] < x1 + 2 and lb[2] > x0 - 2 and len(text) <= 40 and lb[1] > 64
+                lb[3] <= y0 + 1 and y0 - lb[3] < 120 and lb[0] < x1 + 2 and lb[2] > x0 - 2
+                and size > body + 0.5 and len(text) <= 40 and lb[1] > 64
             ) and (entry is None or lb[3] > entry[0]):
                 entry = (lb[3], text)
-    if near is not None and near[0]:
+    if near is not None and near[0] > body + 0.5:
         return near[1]                      # a real heading sits right above — trust it
     if entry is not None:
         return entry[1]                     # the item name above the flavor paragraph
