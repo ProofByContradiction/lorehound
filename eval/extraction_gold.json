@@ -287,8 +287,8 @@
       "expect_headers": ["DAMAGE", "HANDS", "GROUP", "BULK"],
       "expect_row_labels": ["Longsword", "Maul", "Pick"],
       "min_rows": 10,
-      "known_broken": true,
-      "what_was_wrong": "Stage A RECOVERED this — it was missing entirely (find_tables/lines sees no ruling lines on Paizo's shaded tables). The shaded-table fallback now captures it (Longsword 1d8 S, Maul 1d12 B, Pick, Ranseur…). Still known_broken because the text strategy OVER-SEGMENTS columns (BULK split into 'Bu'/'lk', the Weapon Traits column fragmented), so the header check fails. Stage B (confidence + targeted second pass) refines column detection. This is the page where Longsword actually lives (p282 Equipment, not the p278 shields)."
+      "known_broken": false,
+      "what_was_wrong": "FIXED by Stage A + B. Stage A recovered this table (was missing entirely — Paizo's shaded weapons table has no ruling lines for find_tables/lines). Stage B's geometric reconstruction (picked over text-strategy by the lower fragment score) gives clean columns — Damage/Bulk/Hands/Group are now each their own column (no more 'Bu'/'lk' split), so the header check passes. (p282 Martial Weapons: Longsword 1d8 S Bulk 1, Maul 1d12 B Bulk 2, …)"
     }
   ]
 }
