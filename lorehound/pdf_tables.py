@@ -496,6 +496,76 @@ def _recover_shaded_tables(page, page_no: int, found: list) -> list[dict]:
     return out
 
 
+def _dedupe_words(words: list) -> list:
+    """Drop words rendered twice at the same spot. Some PDFs double-strike text for
+    faux-bold, so get_text returns each word twice — e.g. the Pathfinder ability-
+    modifiers table reads '1 –5 1 –5'. Keep one per (x, y, text); a no-op for normal
+    pages (no exact-position duplicates)."""
+    seen: set = set()
+    out = []
+    for w in words:
+        key = (round(w[WORD_X0]), round(w[WORD_Y0]), w[WORD_TEXT])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(w)
+    return out
+
+
+def _unroll_repeated_columns(rows: list[list[str]]) -> list[list[str]]:
+    """If the header row is M>=2 identical copies of a K-column group — a side-by-side
+    layout used to save vertical space (e.g. the Pathfinder ability-modifiers table's
+    two ``Score | Modifier`` halves) — stack the M groups into one K-column table.
+    No-op when the header isn't a clean repeat."""
+    if len(rows) < 2:
+        return rows
+    hdr = [c.strip() for c in rows[0]]
+    n = len(hdr)
+    for k in range(1, n // 2 + 1):
+        if n % k or n // k < 2:
+            continue
+        groups = [hdr[i:i + k] for i in range(0, n, k)]
+        if any(groups[0]) and all(g == groups[0] for g in groups):
+            m = n // k
+            out = [groups[0]]
+            for r in rows[1:]:
+                r = list(r) + [""] * (n - len(r))
+                for j in range(m):
+                    seg = r[j * k:(j + 1) * k]
+                    if any(c.strip() for c in seg):
+                        out.append(seg)
+            return out
+    return rows
+
+
+def _maybe_unroll_sidebyside(page, words, xe, ye, rows):
+    """A narrow lines-detected table may really be a side-by-side repeated layout that
+    find_tables merged into a few wide columns. Rebuild it from word geometry and, if
+    the columns form a repeated group, unroll them. Returns the unrolled rows when it
+    applies (and is a strict improvement), else the original rows."""
+    if not rows or len(rows[0]) > 4:
+        return rows
+    # Extend the top above ye[0] to capture the header row (it sits just above the
+    # first ruled band), so the repeated column group is visible to the unroller.
+    pitch = (ye[-1] - ye[0]) / (len(ye) - 1) if len(ye) > 1 else 12.0
+    y_top = ye[0] - max(12.0, pitch * 1.5)
+    reg = [
+        w for w in words
+        if xe[0] - 2 <= w[WORD_X0] < xe[-1] + 2 and y_top <= w[WORD_Y0] < ye[-1] + 2
+    ]
+    starts = _trav_col_anchors(reg, gap=20.0, numeric_only=False)
+    if len(starts) < 4:  # need >=2 groups of >=2 columns
+        return rows
+    geo = _trav_drop_empty_cols([
+        r for r in _trav_band_rows(reg, xe[0], xe[-1], y_top, ye[-1], starts)
+        if any(c.strip() for c in r)
+    ])
+    unrolled = _unroll_repeated_columns(geo)
+    if unrolled is not geo and len(unrolled[0]) < len(geo[0]) and len(unrolled) > len(rows):
+        return unrolled
+    return rows
+
+
 def extract_tables(page, page_no: int, profile=None) -> list[dict]:
     """Generic table extraction for one page, plus any source-specific
     reconstructions from ``profile`` (the hybrid indexer — see :mod:`sources`)."""
@@ -515,7 +585,8 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
     for t in found:
         by_col[(round(t.bbox[0] / 8), round(t.bbox[2] / 8))].append(t)
 
-    words = page.get_text("words")  # (x0, y0, x1, y1, text, block, line, word)
+    # De-dup double-struck words (faux-bold renders each word twice) before bucketing.
+    words = _dedupe_words(page.get_text("words"))  # (x0, y0, x1, y1, text, block, line, word)
     out: list[dict] = []
 
     for bands in by_col.values():
@@ -554,6 +625,9 @@ def extract_tables(page, page_no: int, profile=None) -> list[dict]:
             keep = [i for i in range(nc) if any(grid[r][i].strip() for r in range(nr))]
             rows = [[row[i] for i in keep] for row in grid]
             rows = [r for r in rows if any(c.strip() for c in r)]
+            # Unroll side-by-side repeated layouts (e.g. the two Score|Modifier halves
+            # of the Pathfinder ability-modifiers table) into one column group.
+            rows = _maybe_unroll_sidebyside(page, words, xe, ye, rows)
             if len(rows) >= 2 and len(rows[0]) >= 2:
                 out.append(
                     {

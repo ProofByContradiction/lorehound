@@ -15,8 +15,43 @@ Live gold:  LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_extraction
 import os
 import unittest
 
-from lorehound.pdf_tables import _frag_fraction, _recover_trailing_rows, _shaded_table_regions
+from lorehound.pdf_tables import (
+    _dedupe_words,
+    _frag_fraction,
+    _recover_trailing_rows,
+    _shaded_table_regions,
+    _unroll_repeated_columns,
+)
 from scripts.extraction_eval import _find_table, score_entry, summarize
+
+
+class TestDedupeAndUnroll(unittest.TestCase):
+    """De-dup of double-struck words + unroll of side-by-side repeated columns —
+    the Pathfinder ability-modifiers fix."""
+
+    def test_dedupe_drops_same_position_duplicates(self):
+        ws = [_w(10, 10, 20, 18, "1"), _w(10, 10, 20, 18, "1"), _w(40, 10, 50, 18, "-5")]
+        self.assertEqual(len(_dedupe_words(ws)), 2)  # the duplicate "1" is dropped
+
+    def test_dedupe_keeps_distinct_words(self):
+        ws = [_w(10, 10, 20, 18, "1"), _w(10, 30, 20, 38, "1")]  # same text, different y
+        self.assertEqual(len(_dedupe_words(ws)), 2)
+
+    def test_unroll_stacks_repeated_groups(self):
+        rows = [
+            ["Ability Score", "Modifier", "Ability Score", "Modifier"],
+            ["1", "-5", "14-15", "+2"],
+            ["2-3", "-4", "16-17", "+3"],
+        ]
+        out = _unroll_repeated_columns(rows)
+        self.assertEqual(out[0], ["Ability Score", "Modifier"])      # one header group
+        self.assertIn(["14-15", "+2"], out)                          # right half stacked in
+        self.assertIn(["1", "-5"], out)
+        self.assertTrue(all(len(r) == 2 for r in out))
+
+    def test_unroll_noop_on_normal_header(self):
+        rows = [["Weapon", "Damage", "Bulk"], ["Longsword", "1d8 S", "1"]]
+        self.assertEqual(_unroll_repeated_columns(rows), rows)
 
 
 class TestFragFraction(unittest.TestCase):
