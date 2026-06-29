@@ -272,6 +272,11 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     # can't reach here.
     if some("ARMOR", "ARMOUR") and has("AC") and some("BULK", "DEX", "PRICE"):
         return "items"
+    # Traveller-style armor: a catalogue priced by Protection rating + tech level
+    # (no AC / LOCATION / Bulk). The TL requirement keeps a prose paragraph that
+    # merely says "armour protection" (the CSC civilian-suits blurb) out.
+    if some("ARMOR", "ARMOUR") and has("PROTECTION", "TL"):
+        return "items"
     if has("WEAPON") and some("DAMAGE", "REL"):
         return "items"
     if has("FUEL") and some("ARMOR", "ARMOUR", "SPEED"):
@@ -1410,12 +1415,14 @@ sources.register(
         # 10-column PF armor layout.
         armor_schema=sources.ArmorSchema(
             detect=("ARMOR", "AC", "BULK"),
-            columns=(
-                "Armor", "Price", "AC Bonus", "Dex Cap", "Check Penalty",
-                "Speed Penalty", "Strength", "Bulk", "Group", "Traits",
+            raw_width=12,
+            column_map=(
+                ("Armor", (0, 1)),          # name split across cols 0-1 (Chain|shirt)
+                ("Price", (2,)), ("AC Bonus", (3,)), ("Dex Cap", (4,)),
+                ("Check Penalty", (5,)), ("Speed Penalty", (6,)),
+                ("Strength", (7,)), ("Bulk", (8,)), ("Group", (9,)),
+                ("Traits", (10, 11)),       # "Armor Traits" split across cols 10-11
             ),
-            name_cols=2,
-            tail_cols=2,
         ),
     )
 )
@@ -1432,6 +1439,24 @@ sources.register(
         career_detect=is_traveller_career_page,
         career_sections=traveller_career_sections,
         career_geometry=_MONGOOSE_CAREER_GEOMETRY,
+        # The CSC p14 master armour table comes out 10-wide with empty header
+        # cells: the protection value sits in col 1 (its label "PROTECTION" lands
+        # in the empty col 2, where long notes also spill), TL/Rad/Kg/Cost in cols
+        # 4-7, and Required Skill in col 9 — cols 3 and 8 are blank. Remap to the
+        # canonical layout. The detail tables (7-wide) and the powered-armour table
+        # (10-wide with STR/DEX/SLOTS) are already aligned — width + the STR/DEX/
+        # SLOTS reject keep them untouched.
+        armor_schema=sources.ArmorSchema(
+            detect=("ARMOUR", "PROTECTION"),
+            reject=("STR", "DEX", "SLOTS"),
+            raw_width=10,
+            column_map=(
+                ("Armour Type", (0,)),
+                ("Protection", (1, 2)),     # value in col 1; long notes spill into col 2
+                ("TL", (4,)), ("Rad", (5,)), ("Kg", (6,)), ("Cost", (7,)),
+                ("Required Skill", (9,)),
+            ),
+        ),
     )
 )
 

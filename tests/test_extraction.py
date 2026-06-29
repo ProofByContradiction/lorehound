@@ -120,10 +120,13 @@ class TestArmorSchema(unittest.TestCase):
 
     SCHEMA = sources.ArmorSchema(
         detect=("ARMOR", "AC", "BULK"),
-        columns=("Armor", "Price", "AC Bonus", "Dex Cap", "Check Penalty",
-                 "Speed Penalty", "Strength", "Bulk", "Group", "Traits"),
-        name_cols=2,
-        tail_cols=2,
+        raw_width=12,
+        column_map=(
+            ("Armor", (0, 1)), ("Price", (2,)), ("AC Bonus", (3,)),
+            ("Dex Cap", (4,)), ("Check Penalty", (5,)), ("Speed Penalty", (6,)),
+            ("Strength", (7,)), ("Bulk", (8,)), ("Group", (9,)),
+            ("Traits", (10, 11)),
+        ),
     )
 
     RAW = [
@@ -136,8 +139,10 @@ class TestArmorSchema(unittest.TestCase):
         ["Leather", "", "2 gp", "+1", "+4", "–1", "—", "10", "1", "Leather", "", "—"],
     ]
 
-    def test_raw_width_derived(self):
-        self.assertEqual(self.SCHEMA.raw_width, 12)
+    def test_columns_derived_from_map(self):
+        self.assertEqual(self.SCHEMA.columns[0], "Armor")
+        self.assertEqual(self.SCHEMA.columns[-1], "Traits")
+        self.assertEqual(len(self.SCHEMA.columns), 10)
 
     def test_remaps_split_name_and_trailing_traits(self):
         out = self.SCHEMA.apply(self.RAW)
@@ -177,6 +182,57 @@ class TestArmorSchema(unittest.TestCase):
     def test_no_schema_is_identity(self):
         prof = sources.SourceProfile(name="x", games=("x",))
         self.assertIs(prof.normalize_rows(self.RAW), self.RAW)
+
+
+class TestTravellerArmorSchema(unittest.TestCase):
+    """The Traveller CSC master armour table: 10-wide with the protection value in
+    col 1 (notes spilling into col 2), TL/Rad/Kg/Cost in cols 4-7, Required Skill
+    in col 9, and empty cols 3/8. A sibling 10-wide powered-armour table carries
+    STR/DEX/SLOTS and must be left alone (reject)."""
+
+    SCHEMA = sources.ArmorSchema(
+        detect=("ARMOUR", "PROTECTION"),
+        reject=("STR", "DEX", "SLOTS"),
+        raw_width=10,
+        column_map=(
+            ("Armour Type", (0,)), ("Protection", (1, 2)), ("TL", (4,)),
+            ("Rad", (5,)), ("Kg", (6,)), ("Cost", (7,)), ("Required Skill", (9,)),
+        ),
+    )
+
+    HDR = ["ARMOUR TYPE", "", "PROTECTION", "", "TL", "RAD", "KG", "COST", "",
+           "REQUIRED SKILL"]
+
+    def test_drops_empty_cols_and_keeps_value(self):
+        rows = [self.HDR,
+                ["Ballistic Vest", "+4", "", "", "8", "—", "1", "Cr500", "", "None"]]
+        out = self.SCHEMA.apply(rows)
+        self.assertEqual(out[0], ["Armour Type", "Protection", "TL", "Rad", "Kg",
+                                  "Cost", "Required Skill"])
+        self.assertEqual(out[1], ["Ballistic Vest", "+4", "8", "—", "1", "Cr500",
+                                  "None"])
+
+    def test_joins_protection_note_spilled_into_col2(self):
+        rows = [self.HDR,
+                ["Ceramic Carapace", "+10 (+16 and", "vs. lasers)", "", "12", "—",
+                 "4", "Cr12000", "", "None"]]
+        out = self.SCHEMA.apply(rows)
+        self.assertEqual(out[1][1], "+10 (+16 and vs. lasers)")
+
+    def test_reject_leaves_powered_armor_untouched(self):
+        # same width (10) but STR/DEX/SLOTS → a different, already-aligned layout
+        powered = [["ARMOUR TYPE", "PROTECTION", "TL", "RAD", "STR", "DEX",
+                    "SLOTS", "KG", "COST", "REQUIRED SKILL"],
+                   ["Battle Dress", "+26", "13", "245", "+6", "+2", "30", "180",
+                    "Cr275000", "Vacc Suit 2"]]
+        self.assertIsNone(self.SCHEMA.apply(powered))
+
+    def test_seven_col_detail_table_unmatched(self):
+        # the aligned 7-wide detail tables don't match this 10-wide schema
+        detail = [["ARMOUR TYPE", "PROTECTION", "TL", "RAD", "KG", "COST",
+                   "REQUIRED SKILL"],
+                  ["Breastplate", "+3", "1", "—", "5", "Cr200", "None"]]
+        self.assertIsNone(self.SCHEMA.apply(detail))
 
 
 class TestDedupeAndUnroll(unittest.TestCase):
