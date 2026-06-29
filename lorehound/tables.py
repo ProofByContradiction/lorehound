@@ -197,12 +197,31 @@ def _stat_card(pairs: list[tuple[str, str]]) -> tuple[str, bool]:
     return _render_grid(stats, _BUDGET)
 
 
+def _statblock_value(row: list[str], ncols: int) -> str:
+    """The value for one component row of a stat block. A 4-column Traveller ship
+    block is ``Component | Description | Tons | Cost(MCr)`` — keep the trailing
+    tonnage/cost out of the description (``Thrust 2 (2 t, MCr 4)``) instead of
+    mashing them in (``Thrust 2 2 4``). Narrower blocks just join the rest."""
+    rest = [c.strip() for c in row[1:]]
+    if ncols < 4:
+        return " ".join(c for c in rest if c)
+    desc = " ".join(c for c in rest[:-2] if c)
+    tons, cost = (rest[-2] if len(rest) >= 2 else ""), (rest[-1] if rest else "")
+    extra = []
+    if tons and tons != "—":
+        extra.append(f"{tons} t")
+    if cost and cost != "—":
+        extra.append(f"MCr {cost}")
+    return f"{desc} ({', '.join(extra)})".strip() if extra else desc
+
+
 def _statblock_card(grid: list[list[str]]) -> tuple[str, bool]:
     """Render a component stat block (rows *are* the stats — first column is a
     label, no header row) as a Stat | Value card: col0 is the label, the rest of
-    the row joined is the value."""
+    the row the value (see :func:`_statblock_value` for the ship Tons/Cost split)."""
+    ncols = max((len(r) for r in grid), default=0)
     return _stat_card(
-        [(row[0].strip(), " ".join(c.strip() for c in row[1:] if c.strip())) for row in grid]
+        [(row[0].strip(), _statblock_value(row, ncols)) for row in grid if row and row[0].strip()]
     )
 
 
