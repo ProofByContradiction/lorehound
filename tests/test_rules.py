@@ -435,6 +435,14 @@ class TestItemCard(unittest.TestCase):
         self.assertIn("DAMAGE", block)
         self.assertNotIn("M16", block)             # only the matched item
 
+    def test_card_title_strips_footnote_marker(self):
+        from lorehound.tables import render_item
+
+        # A leaked footnote marker ("BMP-2*") must not show in the card title.
+        rows = [["VEHICLE", "TYPE"], ["BMP-2*", "IFV"], ["M1 Abrams", "MBT"]]
+        _block, _wide, name = render_item(rows, "BMP-2")
+        self.assertEqual(name, "BMP-2")
+
     def test_name_col_picks_alphabetic_not_longest(self):
         from lorehound.tables import _name_col
 
