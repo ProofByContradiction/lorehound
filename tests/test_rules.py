@@ -261,6 +261,18 @@ class TestClassifyAndCategory(unittest.TestCase):
         rows = [["EFFECT", "ARMOR", "NOTES"], ["Cover", "reduces hits", "see p.42"]]
         self.assertEqual(classify_table("Combat", rows), "rules")
 
+    def test_shield_table_routes_to_items(self):
+        from lorehound.pdf_tables import classify_table
+
+        # A SHIELD + HARDNESS catalogue → /item, even with the garbled raw header.
+        raw = [["Shield", "Price AC", "Bonus 1 Speed", "Penalty B", "ulk",
+                "Hardness", "HP", "(BT)"],
+               ["Buckler", "1 gp", "+1", "—", "L", "3", "6", "(3)"]]
+        self.assertEqual(classify_table("", raw), "items")
+        # A material table with Hardness but no Shield column stays a rules table.
+        mat = [["Material", "Hardness", "HP", "BT"], ["Adamantine", "—", "—", "—"]]
+        self.assertEqual(classify_table("Crafting", mat), "rules")
+
 
 class TestExplodeToItems(unittest.TestCase):
     def test_catalog_explodes_to_per_item_picks(self):

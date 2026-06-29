@@ -49,8 +49,10 @@ class CareerGeometry:
 
 @dataclass(frozen=True)
 class ArmorSchema:
-    """Canonical column layout for an armor catalogue that ``find_tables``
-    mis-segments. ``column_map`` is the heart: each entry ``(label, indices)``
+    """Canonical column layout for a defensive-gear catalogue (armor or shields)
+    that ``find_tables`` mis-segments — including a merely garbled header over
+    already-aligned data, where the ``column_map`` is an identity relabel.
+    ``column_map`` is the heart: each entry ``(label, indices)``
     names an output column and the raw source-column index/indices whose cells are
     joined (with spaces) to fill it — so a name split across two cells (PF
     "Chain"|"shirt" → ``(0, 1)``), a value that spilled into the header's empty
@@ -209,11 +211,13 @@ class SourceProfile:
     # Page-layout coordinates for ``career_sections`` (None when no career hooks).
     career_geometry: CareerGeometry | None = None
     # Catalogue tables this source lays out in a way find_tables mis-segments
-    # (name split across columns, mis-bucketed headers). Applied at index time to
-    # repair the cell grid before routing/rendering — no re-extraction needed.
-    armor_schema: ArmorSchema | None = None
+    # (name split across columns, mis-bucketed/garbled headers) — armor and
+    # shields. Each is width-gated, so the first one that matches a grid wins;
+    # applied at index time to repair the cell grid before routing/rendering, so a
+    # fix ships on a reindex with no re-extraction.
+    table_schemas: tuple[ArmorSchema, ...] = ()
     # Catalogue rows that stack several tech-level grades into one (Traveller
-    # armour). Exploded into one row per grade after armor_schema repair.
+    # armour). Exploded into one row per grade after the schema repair.
     grade_split: GradeSplit | None = None
 
     def matches(self, game: str) -> bool:
@@ -230,10 +234,11 @@ class SourceProfile:
         """Repair a mis-segmented catalogue grid using this source's schema(s),
         else return ``rows`` unchanged. Index-time, so a fix ships on a reindex
         without re-extracting the PDF."""
-        if self.armor_schema:
-            fixed = self.armor_schema.apply(rows)
-            if fixed is not None:
+        for schema in self.table_schemas:
+            fixed = schema.apply(rows)
+            if fixed is not None:    # width-gated, so at most one schema matches
                 rows = fixed
+                break
         if self.grade_split:
             rows = self.grade_split.apply(rows)
         return rows
