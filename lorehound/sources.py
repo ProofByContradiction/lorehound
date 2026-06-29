@@ -47,6 +47,54 @@ class CareerGeometry:
     roll_index_max: float = 110.0
 
 
+@dataclass(frozen=True)
+class ArmorSchema:
+    """Canonical column layout for an armor catalogue that ``find_tables``
+    mis-segments — it splits the item name across the first ``name_cols`` columns
+    ("Chain"|"shirt"), splits the trailing label across the last ``tail_cols``
+    ("Flexible,"|"noisy"), and mis-buckets the middle header words ("Dex Cap
+    Check" / "Penalty Speed"). ``apply`` recognises such a table by its header
+    signature + width and remaps every data row to ``columns`` — keeping the
+    system-specific layout here as *data* on the registry, not as special cases in
+    generic extraction code.
+
+    Width bookkeeping: a raw row is ``name_cols`` (joined → name) + middle +
+    ``tail_cols`` (joined → last column); the middle count is ``len(columns) - 2``
+    (the name column and the tail column), so ``raw_width`` reconstructs the
+    expected raw column count the detector gates on."""
+    detect: tuple[str, ...]              # whole-word header markers, ALL required (upper-cased)
+    columns: tuple[str, ...]             # canonical labels incl. the leading name column
+    name_cols: int = 2                   # leading raw columns joined into the item name
+    tail_cols: int = 2                   # trailing raw columns joined into the last column
+
+    @property
+    def raw_width(self) -> int:
+        return self.name_cols + (len(self.columns) - 2) + self.tail_cols
+
+    def apply(self, rows: list[list[str]]) -> list[list[str]] | None:
+        """Return ``rows`` remapped to ``columns`` if this is a matching armor
+        table, else ``None`` (so the caller keeps the original). Gated on exact
+        raw width + every ``detect`` marker present, so it never fires on a
+        differently-shaped table."""
+        import re
+
+        if not rows or len(rows[0]) != self.raw_width:
+            return None
+        hdr = " ".join(rows[0]).upper()
+        if not all(re.search(rf"\b{re.escape(w)}\b", hdr) for w in self.detect):
+            return None
+        out: list[list[str]] = [list(self.columns)]
+        for r in rows[1:]:
+            if len(r) != self.raw_width:     # ragged row — leave untouched
+                out.append(r)
+                continue
+            name = " ".join(c.strip() for c in r[: self.name_cols] if c and c.strip())
+            tail = " ".join(c.strip() for c in r[-self.tail_cols :] if c and c.strip())
+            mid = list(r[self.name_cols : self.raw_width - self.tail_cols])
+            out.append([name, *mid, tail])
+        return out
+
+
 @dataclass
 class SourceProfile:
     name: str
@@ -67,6 +115,10 @@ class SourceProfile:
     career_sections: Callable | None = None
     # Page-layout coordinates for ``career_sections`` (None when no career hooks).
     career_geometry: CareerGeometry | None = None
+    # Catalogue tables this source lays out in a way find_tables mis-segments
+    # (name split across columns, mis-bucketed headers). Applied at index time to
+    # repair the cell grid before routing/rendering — no re-extraction needed.
+    armor_schema: ArmorSchema | None = None
 
     def matches(self, game: str) -> bool:
         g = (game or "").lower()
@@ -77,6 +129,16 @@ class SourceProfile:
         for fn in self.reconstructors:
             out.extend(fn(page, page_no, existing) or [])
         return out
+
+    def normalize_rows(self, rows: list[list[str]]) -> list[list[str]]:
+        """Repair a mis-segmented catalogue grid using this source's schema(s),
+        else return ``rows`` unchanged. Index-time, so a fix ships on a reindex
+        without re-extracting the PDF."""
+        if self.armor_schema:
+            fixed = self.armor_schema.apply(rows)
+            if fixed is not None:
+                return fixed
+        return rows
 
 
 _REGISTRY: list[SourceProfile] = []

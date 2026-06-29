@@ -264,6 +264,14 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
         return "items"
     if some("ARMOR", "ARMOUR") and has("LOCATION"):
         return "items"
+    # Armor catalogue priced by defensive stats (Pathfinder-style: AC bonus + bulk
+    # / dex-cap, no LOCATION column like T2K body armor). Matches the raw header
+    # (split name/labels) and the profile-normalized canonical header alike, so it
+    # routes whether or not a source profile repaired the grid first. Vehicles are
+    # already routed above (VEHICLE / COMBAT SPEED), so an "AC"+"Armor" ship table
+    # can't reach here.
+    if some("ARMOR", "ARMOUR") and has("AC") and some("BULK", "DEX", "PRICE"):
+        return "items"
     if has("WEAPON") and some("DAMAGE", "REL"):
         return "items"
     if has("FUEL") and some("ARMOR", "ARMOUR", "SPEED"):
@@ -1389,6 +1397,26 @@ sources.register(
         name="Twilight 2000 (4E)",
         games=("twilight", "t2k", "2000"),
         reconstructors=[_t2k_careers, _t2k_archetypes],
+    )
+)
+sources.register(
+    sources.SourceProfile(
+        name="Pathfinder (2e)",
+        games=("pathfinder", "pf2e"),
+        # The p276 basic-armor tables (Light / Medium / Heavy) come out of
+        # find_tables 12-wide: the name is split across cols 0-1 ("Chain"|"shirt"),
+        # the trailing "Armor Traits" across cols 10-11, and the middle headers are
+        # mis-bucketed ("Dex Cap Check" / "Penalty Speed"). Remap to the canonical
+        # 10-column PF armor layout.
+        armor_schema=sources.ArmorSchema(
+            detect=("ARMOR", "AC", "BULK"),
+            columns=(
+                "Armor", "Price", "AC Bonus", "Dex Cap", "Check Penalty",
+                "Speed Penalty", "Strength", "Bulk", "Group", "Traits",
+            ),
+            name_cols=2,
+            tail_cols=2,
+        ),
     )
 )
 sources.register(

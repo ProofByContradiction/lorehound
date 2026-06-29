@@ -441,6 +441,8 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     chunks: list[Chunk] = []
     for t in tables:
         rows = t.get("rows") or []
+        if profile:  # repair a mis-segmented catalogue grid (e.g. PF armor) before routing
+            rows = profile.normalize_rows(rows)
         if len(rows) < 2 or not _is_real_table(rows):
             continue
         name = _table_name(t.get("title", ""), t.get("section", ""), rows)
