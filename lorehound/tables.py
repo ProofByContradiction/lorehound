@@ -314,7 +314,10 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     header = grid[0] + [""] * (ncols - len(grid[0]))
     row = grid[r] + [""] * (ncols - len(grid[r]))
     name_col = _name_col([header, row])
-    name = row[name_col] if name_col < len(row) and row[name_col] else query
+    # Strip a trailing footnote marker so the card title reads "BMP-2", not "BMP-2*"
+    # (matches the cleaning the catalog lookup already does for the item NAME).
+    cell = row[name_col].rstrip(" *†‡").strip() if name_col < len(row) else ""
+    name = cell or query
     pairs = [(header[j] or "—", row[j]) for j in range(ncols) if j != name_col and row[j]]
     block, wide = _stat_card(pairs)
     if not block:  # nothing but the name — fall back to the whole table
