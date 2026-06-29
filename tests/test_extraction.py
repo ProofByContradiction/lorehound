@@ -20,6 +20,7 @@ from lorehound.pdf_tables import (
     _frag_fraction,
     _recover_trailing_rows,
     _shaded_table_regions,
+    _split_stacked_catalogs,
     _split_stacked_tables,
     _title,
     _unroll_repeated_columns,
@@ -58,6 +59,57 @@ class TestSplitStackedTables(unittest.TestCase):
     def test_noop_on_single_roll_table(self):
         rows = [["1D", "Mishap"]] + [[str(i), "x"] for i in range(1, 7)]
         self.assertEqual(_split_stacked_tables(rows), [rows])
+
+
+class TestSplitStackedCatalogs(unittest.TestCase):
+    """_split_stacked_catalogs — split a catalog blob (the Pathfinder weapons page:
+    Simple/Martial sub-tables under a repeated header) WITHOUT shredding career cards
+    or stat blocks (which look header-ish per row but never repeat a signature)."""
+
+    def test_splits_at_repeated_header_recovering_all_items(self):
+        rows = [
+            ["Simple Weapons", "Price", "Damage", "Bulk", "Hands", "Group"],
+            ["Club", "0", "1d6 B", "1", "1", "Club"],
+            ["Dagger", "2 sp", "1d4 P", "L", "1", "Knife"],
+            ["TABLE 6–7: MELEE", "WEAPONS", "", "", "", ""],   # leaked caption → trimmed
+            ["Martial Weapons", "Price", "Damage", "Bulk", "Hands", "Group"],
+            ["Greataxe", "2 gp", "1d12 S", "2", "2", "Axe"],
+            ["Greatsword", "2 gp", "1d12 S", "2", "2", "Sword"],
+        ]
+        segs = _split_stacked_catalogs(rows)
+        self.assertEqual(len(segs), 2)
+        self.assertEqual(segs[0], rows[0:3])                  # Simple: header + Club + Dagger
+        self.assertEqual([r[0] for r in segs[1][1:]], ["Greataxe", "Greatsword"])
+        self.assertNotIn("TABLE 6–7: MELEE", [r[0] for s in segs for r in s])
+
+    def test_does_not_shred_a_career_card(self):
+        # Header-ish rows (CAREER, REQUIREMENTS, SKILLS…) but no repeated signature.
+        rows = [
+            ["CAREER", "POLICE OFFICER", "DETECTIVE", "SWAT"],
+            ["REQUIREMENTS", "No D attribute", "EMP B+", "AGL B+"],
+            ["SKILLS", "Close Combat", "Recon", "Recon"],
+            ["STARTING GEAR", "Pistol", "Lockpicks", "Rifle"],
+            ["ROLL", "Scout", "Linguist", "Scout"],
+            ["RANK", "Patrol", "Sergeant", "Officer"],
+        ]
+        self.assertEqual(_split_stacked_catalogs(rows), [rows])
+
+    def test_does_not_shred_a_ship_statblock(self):
+        # Component rows carry "—" placeholders / digits → never header-ish.
+        rows = [
+            ["Hull", "200 tons", "—", "12"],
+            ["M-Drive", "Thrust 1", "2", "4"],
+            ["Fuel Scoops", "—", "—", ""],
+            ["Library", "—", "—", ""],
+            ["Sensors", "Civilian", "1", "3"],
+            ["Software", "Manoeuvre", "—", ""],
+        ]
+        self.assertEqual(_split_stacked_catalogs(rows), [rows])
+
+    def test_single_catalog_one_header_unchanged(self):
+        rows = [["Weapon", "Price", "Damage", "Bulk"]] + \
+            [[w, "1 gp", "1d8", "1"] for w in ("Sword", "Axe", "Mace", "Spear", "Bow")]
+        self.assertEqual(_split_stacked_catalogs(rows), [rows])
 
 
 class TestDedupeAndUnroll(unittest.TestCase):
