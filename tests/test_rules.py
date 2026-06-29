@@ -273,6 +273,17 @@ class TestClassifyAndCategory(unittest.TestCase):
         mat = [["Material", "Hardness", "HP", "BT"], ["Adamantine", "—", "—", "—"]]
         self.assertEqual(classify_table("Crafting", mat), "rules")
 
+    def test_roll_table_not_routed_to_transport(self):
+        from lorehound.pdf_tables import classify_table
+
+        # A starting-vehicle roll table (die-leading first column) mentions VEHICLE
+        # but must stay a rules table, not become a /transport catalogue.
+        rows = [["2D6+PCS", "VEHICLE"], ["3–6", "None"], ["7–8", "2WD Car"]]
+        self.assertEqual(classify_table("Player Characters", rows), "rules")
+        # A real vehicle catalogue (name-leading) still routes to transport.
+        veh = [["VEHICLE", "TYPE", "COMBAT SPEED"], ["M1 Abrams", "MBT", "5/4 T"]]
+        self.assertEqual(classify_table("", veh), "transport")
+
 
 class TestExplodeToItems(unittest.TestCase):
     def test_catalog_explodes_to_per_item_picks(self):
@@ -376,6 +387,26 @@ class TestCatalogCards(unittest.TestCase):
         cards = _build_catalog_cards([self._single()])[("T2K", "items")]
         self.assertEqual([n for n, _ in cards], ["M1911A1"])    # not "Pistol"
         self.assertEqual(len(cards[0][1].rows), 4)             # whole stat block
+
+    def test_catalog_row_preferred_over_featured_statblock(self):
+        from lorehound.rules import _build_catalog_cards
+
+        # A T2K vehicle has a mangled featured sidebar (whole-table statblock, name
+        # in heading) that sorts first, and a clean catalogue row. The catalogue
+        # row must win even though the sidebar was seen first.
+        featured = Chunk("T2K", "Core", "transport", "Vehicles › M151", "p. 119", "x",
+                         rows=[["TYPE", "REL", "FRONT", "ARMOR"],
+                               ["Car", "5", "1", ""],
+                               ["REAR", "ARMOR", "FUEL", "CARGO"],
+                               ["1", "", "G", "75"]])
+        catalog = Chunk("T2K", "Core", "transport", "US MILITARY VEHICLES", "p. 121", "x",
+                        rows=[["VEHICLE", "TYPE", "FRONT ARMOR", "PRICE"],
+                              ["M151", "Car", "1", "10,000"],
+                              ["M998 HMMWV", "4WD Car", "1", "15,000"]])
+        cards = _build_catalog_cards([featured, catalog])[("T2K", "transport")]
+        m151 = next(c for n, c in cards if n == "M151")
+        self.assertEqual(m151.rows[0][0], "VEHICLE")   # the clean catalogue row…
+        self.assertEqual(len(m151.rows), 2)            # …not the 4-row featured statblock
 
     def test_lookup_resolves_name_to_card(self):
         from lorehound.rules import RulesService, _build_catalog_cards
