@@ -1457,6 +1457,10 @@ sources.register(
                 ("Required Skill", (9,)),
             ),
         ),
+        # Armour rows stack a suit's Basic/Improved/Advanced (or multi-TL) grades
+        # into one cell-row — explode into one card per grade, keyed off the TL
+        # column's grade count.
+        grade_split=sources.GradeSplit(detect=("PROTECTION", "TL"), count_label="TL"),
     )
 )
 
