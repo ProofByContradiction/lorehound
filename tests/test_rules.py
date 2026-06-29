@@ -236,6 +236,31 @@ class TestClassifyAndCategory(unittest.TestCase):
         self.assertEqual(classify_table("VEHICLES", veh), "rules")
         self.assertEqual(classify_table("COMMON SPACECRAFT", veh), "rules")
 
+    def test_armor_catalogue_routes_to_items(self):
+        from lorehound.pdf_tables import classify_table
+
+        # PF-style armor priced by defensive stats — both the raw (split-name,
+        # mis-bucketed) header and the profile-normalized canonical header route.
+        raw = [["Light", "Armor", "Price", "AC Bonus", "Dex Cap Check",
+                "Penalty Speed", "Penalty", "Strength", "Bulk", "Group",
+                "Armor", "Traits"],
+               ["Chain", "shirt", "5 gp", "+2", "+3", "–1", "—", "12", "1",
+                "Chain", "Flexible,", "noisy"]]
+        canon = [["Armor", "Price", "AC Bonus", "Dex Cap", "Check Penalty",
+                  "Speed Penalty", "Strength", "Bulk", "Group", "Traits"],
+                 ["Chain shirt", "5 gp", "+2", "+3", "–1", "—", "12", "1",
+                  "Chain", "Flexible, noisy"]]
+        self.assertEqual(classify_table("", raw), "items")
+        self.assertEqual(classify_table("", canon), "items")
+
+    def test_armor_word_alone_does_not_route_to_items(self):
+        from lorehound.pdf_tables import classify_table
+
+        # "ARMOR" must need the defensive stat columns (AC + bulk/dex/price) to
+        # route — a rules table that merely mentions armour stays "rules".
+        rows = [["EFFECT", "ARMOR", "NOTES"], ["Cover", "reduces hits", "see p.42"]]
+        self.assertEqual(classify_table("Combat", rows), "rules")
+
 
 class TestExplodeToItems(unittest.TestCase):
     def test_catalog_explodes_to_per_item_picks(self):

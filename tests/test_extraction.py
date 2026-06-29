@@ -15,6 +15,7 @@ Live gold:  LOREHOUND_GOLD_EVAL=1 python -m unittest tests.test_extraction
 import os
 import unittest
 
+from lorehound import sources
 from lorehound.pdf_tables import (
     _dedupe_words,
     _frag_fraction,
@@ -110,6 +111,72 @@ class TestSplitStackedCatalogs(unittest.TestCase):
         rows = [["Weapon", "Price", "Damage", "Bulk"]] + \
             [[w, "1 gp", "1d8", "1"] for w in ("Sword", "Axe", "Mace", "Spear", "Bow")]
         self.assertEqual(_split_stacked_catalogs(rows), [rows])
+
+
+class TestArmorSchema(unittest.TestCase):
+    """ArmorSchema.apply — repair a PF-style armor grid that find_tables emits
+    12-wide (name split across cols 0-1, traits across cols 10-11, mis-bucketed
+    middle headers) into the canonical 10-column layout."""
+
+    SCHEMA = sources.ArmorSchema(
+        detect=("ARMOR", "AC", "BULK"),
+        columns=("Armor", "Price", "AC Bonus", "Dex Cap", "Check Penalty",
+                 "Speed Penalty", "Strength", "Bulk", "Group", "Traits"),
+        name_cols=2,
+        tail_cols=2,
+    )
+
+    RAW = [
+        ["Light", "Armor", "Price", "AC Bonus", "Dex Cap Check", "Penalty Speed",
+         "Penalty", "Strength", "Bulk", "Group", "Armor", "Traits"],
+        # split name + two-cell trait
+        ["Chain", "shirt", "5 gp", "+2", "+3", "–1", "—", "12", "1", "Chain",
+         "Flexible,", "noisy"],
+        # single-word name (col1 empty) + single trait in the last cell
+        ["Leather", "", "2 gp", "+1", "+4", "–1", "—", "10", "1", "Leather", "", "—"],
+    ]
+
+    def test_raw_width_derived(self):
+        self.assertEqual(self.SCHEMA.raw_width, 12)
+
+    def test_remaps_split_name_and_trailing_traits(self):
+        out = self.SCHEMA.apply(self.RAW)
+        self.assertIsNotNone(out)
+        self.assertEqual(out[0], list(self.SCHEMA.columns))
+        # name merged from cols 0-1; traits merged from the trailing cols
+        self.assertEqual(out[1], ["Chain shirt", "5 gp", "+2", "+3", "–1", "—",
+                                  "12", "1", "Chain", "Flexible, noisy"])
+        # single-word name keeps just col0; empty trait collapses to the last value
+        self.assertEqual(out[2], ["Leather", "2 gp", "+1", "+4", "–1", "—",
+                                  "10", "1", "Leather", "—"])
+
+    def test_labels_align_after_remap(self):
+        out = self.SCHEMA.apply(self.RAW)
+        card = dict(zip(out[0], out[1], strict=True))
+        self.assertEqual(card["Dex Cap"], "+3")
+        self.assertEqual(card["Check Penalty"], "–1")
+        self.assertEqual(card["Group"], "Chain")
+
+    def test_returns_none_on_wrong_width(self):
+        narrow = [["Armor", "Price", "AC"], ["Padded", "2 sp", "+1"]]
+        self.assertIsNone(self.SCHEMA.apply(narrow))
+
+    def test_returns_none_when_detect_marker_absent(self):
+        # right width, but no BULK column → not an armor table this schema owns
+        rows = [["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"],
+                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]]
+        self.assertIsNone(self.SCHEMA.apply(rows))
+
+    def test_profile_normalize_rows_repairs_then_passes_through(self):
+        prof = sources.SourceProfile(name="x", games=("x",), armor_schema=self.SCHEMA)
+        self.assertEqual(prof.normalize_rows(self.RAW)[1][0], "Chain shirt")
+        # a non-matching grid is returned unchanged (identity)
+        other = [["NAME", "DAMAGE"], ["Sword", "1d8"]]
+        self.assertIs(prof.normalize_rows(other), other)
+
+    def test_no_schema_is_identity(self):
+        prof = sources.SourceProfile(name="x", games=("x",))
+        self.assertIs(prof.normalize_rows(self.RAW), self.RAW)
 
 
 class TestDedupeAndUnroll(unittest.TestCase):
