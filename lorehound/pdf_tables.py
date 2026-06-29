@@ -244,6 +244,14 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     def some(*words: str) -> bool:
         return any(re.search(rf"\b{w}\b", hdr) for w in words)
 
+    # A die-roll / outcome table (first column header like "2D6+PCS", "D10", "1D",
+    # "Roll") is a rules table, not a weapon/vehicle catalogue — even when its cells
+    # mention "VEHICLE" or a weapon (e.g. a starting-gear roll on a PC page that
+    # would otherwise be mis-routed to /transport on the VEHICLE keyword).
+    first = rows[0][0].strip() if rows[0] else ""
+    if re.match(r"(?i)^(roll\b|\d*d\d)", first):
+        return "rules"
+
     # Career / archetype cards FIRST: a 'PROFESSOR' career column must not be read
     # as a weapon via the 'ROF' substring.
     if hdr.startswith("CAREER") or has("LAST", "CAREER") or "SPECIALTY (D6)" in hdr:

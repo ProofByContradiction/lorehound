@@ -595,20 +595,29 @@ def _build_catalog_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tupl
     instead of relying on BM25 (which can't surface a single row of a long catalog)."""
     from collections import defaultdict
 
-    out: dict[tuple[str, str], dict[str, tuple[str, Chunk]]] = defaultdict(dict)
+    # name_lower -> (name, card, from_catalog_row). ``from_catalog_row`` marks a clean
+    # ``[header, row]`` card from a multi-item catalogue; a heading-named whole-table
+    # statblock is not. When the same item appears as both — a T2K vehicle has a
+    # mangled featured sidebar *and* a clean catalogue row — keep the catalogue row.
+    out: dict[tuple[str, str], dict[str, tuple[str, Chunk, bool]]] = defaultdict(dict)
     for c in chunks:
         if c.category not in ("items", "transport") or not c.rows:
             continue
         leaf = c.section.split("›")[-1].strip()
         for name, rows in _catalog_cards_for_chunk(c):
             whole = rows is c.rows
+            from_catalog_row = not whole
+            existing = out[(c.game, c.category)].get(name.lower())
+            # keep the first, but let a clean catalogue row replace a heading-named statblock
+            if existing is not None and not (from_catalog_row and not existing[2]):
+                continue
             card = Chunk(
                 game=c.game, source=c.source, category=c.category,
                 section=c.section if whole else f"{leaf} › {name}",
                 locator=c.locator, text=name, rows=rows,
             )
-            out[(c.game, c.category)].setdefault(name.lower(), (name, card))
-    return {k: list(v.values()) for k, v in out.items()}
+            out[(c.game, c.category)][name.lower()] = (name, card, from_catalog_row)
+    return {k: [(n, card) for n, card, _ in v.values()] for k, v in out.items()}
 
 
 class RulesService:
