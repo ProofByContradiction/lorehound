@@ -568,6 +568,12 @@ def _catalog_cards_for_chunk(c: Chunk):
     leaf = c.section.split("›")[-1].strip()
 
     def _single():
+        # A /transport card named only by its page heading must be a real component
+        # stat block (a ship); otherwise it's a mis-routed fragment (a Crew list, a
+        # Deckplan Legend, a power-requirements table) that leaked in — drop it. Real
+        # vehicles come through the catalogue (multi-item) path, not here.
+        if c.category == "transport" and not is_ship_statblock(rows):
+            return []
         return [(leaf, c.rows)] if _is_card_title(leaf) else []
 
     if not rows or is_ship_statblock(rows) or len(rows) < 3 or len(rows[0]) < 4:

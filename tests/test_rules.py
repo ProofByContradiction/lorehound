@@ -408,6 +408,23 @@ class TestCatalogCards(unittest.TestCase):
         self.assertEqual(m151.rows[0][0], "VEHICLE")   # the clean catalogue row…
         self.assertEqual(len(m151.rows), 2)            # …not the 4-row featured statblock
 
+    def test_transport_fragment_dropped_ship_kept(self):
+        from lorehound.rules import _build_catalog_cards
+
+        # A real ship is a component stat block (Hull / M-Drive / Power Plant…).
+        ship = Chunk("TRAV", "Core", "transport", "Spacecraft › Scout/Courier", "p. 191", "x",
+                     rows=[["Hull", "100 tons", "—", "6"],
+                           ["M-Drive", "Thrust 2", "2", "4"],
+                           ["Power Plant", "Fusion", "4", "4"],
+                           ["Bridge", "", "10", "0.5"]])
+        # A mis-routed heading-named fragment is not a stat block.
+        fragment = Chunk("TRAV", "Core", "transport", "Spacecraft › Deckplan Legend", "p. 207", "x",
+                         rows=[["", "Crew:", ""], ["Pilot,", "Astrogator,", ""],
+                               ["Engineer,", "", "Medic"]])
+        names = {n for n, _ in _build_catalog_cards([ship, fragment])[("TRAV", "transport")]}
+        self.assertIn("Scout/Courier", names)
+        self.assertNotIn("Deckplan Legend", names)
+
     def test_lookup_resolves_name_to_card(self):
         from lorehound.rules import RulesService, _build_catalog_cards
 
@@ -575,6 +592,38 @@ class TestWrappedStatblock(unittest.TestCase):
         from lorehound.tables import _wrapped_statblock_pairs
 
         self.assertIsNone(_wrapped_statblock_pairs([["WEAPON", "DAMAGE"], ["M16", "3"]]))
+
+
+class TestShipStatblockCard(unittest.TestCase):
+    """A Traveller ship is a component stat block — Component | Description | Tons |
+    Cost(MCr). The trailing tonnage/cost must read as ``(2 t, MCr 4)``, not get
+    mashed into the description as ``Thrust 2 2 4``."""
+
+    SHIP = [["Hull", "100 tons, Streamlined", "—", "6"],
+            ["M-Drive", "Thrust 2", "2", "4"],
+            ["Bridge", "", "10", "0.5"],
+            ["Cargo", "", "12", "—"]]
+
+    def test_value_splits_tons_and_cost(self):
+        from lorehound.tables import _statblock_value
+
+        self.assertEqual(_statblock_value(self.SHIP[1], 4), "Thrust 2 (2 t, MCr 4)")
+        self.assertEqual(_statblock_value(self.SHIP[0], 4), "100 tons, Streamlined (MCr 6)")
+        self.assertEqual(_statblock_value(self.SHIP[2], 4), "(10 t, MCr 0.5)")  # empty desc
+        self.assertEqual(_statblock_value(self.SHIP[3], 4), "(12 t)")           # cost is —
+
+    def test_narrow_block_just_joins(self):
+        from lorehound.tables import _statblock_value
+
+        self.assertEqual(_statblock_value(["Hull", "Armoured", "x2"], 3), "Armoured x2")
+
+    def test_render_item_ship_card_is_clean(self):
+        from lorehound.tables import render_item
+
+        block, _wide, name = render_item(self.SHIP, "Scout/Courier")
+        self.assertIsNone(name)                       # name is the heading, not the grid
+        self.assertIn("Thrust 2 (2 t, MCr 4)", block)
+        self.assertNotIn("Thrust 2 2 4", block)
 
 
 class TestRelevanceCutoff(unittest.TestCase):
