@@ -173,7 +173,7 @@ class TestArmorSchema(unittest.TestCase):
         self.assertIsNone(self.SCHEMA.apply(rows))
 
     def test_profile_normalize_rows_repairs_then_passes_through(self):
-        prof = sources.SourceProfile(name="x", games=("x",), armor_schema=self.SCHEMA)
+        prof = sources.SourceProfile(name="x", games=("x",), table_schemas=(self.SCHEMA,))
         self.assertEqual(prof.normalize_rows(self.RAW)[1][0], "Chain shirt")
         # a non-matching grid is returned unchanged (identity)
         other = [["NAME", "DAMAGE"], ["Sword", "1d8"]]
@@ -182,6 +182,42 @@ class TestArmorSchema(unittest.TestCase):
     def test_no_schema_is_identity(self):
         prof = sources.SourceProfile(name="x", games=("x",))
         self.assertIs(prof.normalize_rows(self.RAW), self.RAW)
+
+
+class TestShieldSchemaAndMultiSchema(unittest.TestCase):
+    """A garbled-header-only table (PF shields): the data is aligned, so an
+    identity column_map just restores the labels. Also checks a profile carrying
+    several width-gated schemas picks the right one."""
+
+    SHIELD = sources.ArmorSchema(
+        detect=("SHIELD", "HARDNESS"),
+        raw_width=8,
+        column_map=(
+            ("Shield", (0,)), ("Price", (1,)), ("AC Bonus", (2,)),
+            ("Speed Penalty", (3,)), ("Bulk", (4,)), ("Hardness", (5,)),
+            ("HP", (6,)), ("BT", (7,)),
+        ),
+    )
+    RAW = [
+        ["Shield", "Price AC", "Bonus 1 Speed", "Penalty B", "ulk", "Hardness",
+         "HP", "(BT)"],
+        ["Buckler", "1 gp", "+1", "—", "L", "3", "6", "(3)"],
+    ]
+
+    def test_identity_relabel_fixes_header_keeps_data(self):
+        out = self.SHIELD.apply(self.RAW)
+        self.assertEqual(out[0], ["Shield", "Price", "AC Bonus", "Speed Penalty",
+                                  "Bulk", "Hardness", "HP", "BT"])
+        self.assertEqual(out[1], ["Buckler", "1 gp", "+1", "—", "L", "3", "6", "(3)"])
+
+    def test_profile_picks_matching_width_gated_schema(self):
+        armor12 = TestArmorSchema.SCHEMA            # raw_width 12
+        prof = sources.SourceProfile(
+            name="x", games=("x",), table_schemas=(armor12, self.SHIELD))
+        # the 8-wide shield grid matches the shield schema, not the 12-wide armor one
+        self.assertEqual(prof.normalize_rows(self.RAW)[0][1], "Price")
+        # the 12-wide PF armor grid still routes to the armor schema
+        self.assertEqual(prof.normalize_rows(TestArmorSchema.RAW)[1][0], "Chain shirt")
 
 
 class TestTravellerArmorSchema(unittest.TestCase):

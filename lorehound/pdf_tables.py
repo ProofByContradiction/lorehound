@@ -277,6 +277,10 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     # merely says "armour protection" (the CSC civilian-suits blurb) out.
     if some("ARMOR", "ARMOUR") and has("PROTECTION", "TL"):
         return "items"
+    # Shields — a defensive-gear catalogue with Hardness/HP (and a Shield name
+    # column). Matches the garbled raw header and the relabeled one alike.
+    if has("SHIELD", "HARDNESS"):
+        return "items"
     if has("WEAPON") and some("DAMAGE", "REL"):
         return "items"
     if has("FUEL") and some("ARMOR", "ARMOUR", "SPEED"):
@@ -1408,20 +1412,36 @@ sources.register(
     sources.SourceProfile(
         name="Pathfinder (2e)",
         games=("pathfinder", "pf2e"),
-        # The p276 basic-armor tables (Light / Medium / Heavy) come out of
-        # find_tables 12-wide: the name is split across cols 0-1 ("Chain"|"shirt"),
-        # the trailing "Armor Traits" across cols 10-11, and the middle headers are
-        # mis-bucketed ("Dex Cap Check" / "Penalty Speed"). Remap to the canonical
-        # 10-column PF armor layout.
-        armor_schema=sources.ArmorSchema(
-            detect=("ARMOR", "AC", "BULK"),
-            raw_width=12,
-            column_map=(
-                ("Armor", (0, 1)),          # name split across cols 0-1 (Chain|shirt)
-                ("Price", (2,)), ("AC Bonus", (3,)), ("Dex Cap", (4,)),
-                ("Check Penalty", (5,)), ("Speed Penalty", (6,)),
-                ("Strength", (7,)), ("Bulk", (8,)), ("Group", (9,)),
-                ("Traits", (10, 11)),       # "Armor Traits" split across cols 10-11
+        table_schemas=(
+            # The p276 basic-armor tables (Light / Medium / Heavy) come out of
+            # find_tables 12-wide: the name is split across cols 0-1
+            # ("Chain"|"shirt"), the trailing "Armor Traits" across cols 10-11, and
+            # the middle headers are mis-bucketed ("Dex Cap Check" / "Penalty
+            # Speed"). Remap to the canonical 10-column PF armor layout.
+            sources.ArmorSchema(
+                detect=("ARMOR", "AC", "BULK"),
+                raw_width=12,
+                column_map=(
+                    ("Armor", (0, 1)),          # name split across cols 0-1 (Chain|shirt)
+                    ("Price", (2,)), ("AC Bonus", (3,)), ("Dex Cap", (4,)),
+                    ("Check Penalty", (5,)), ("Speed Penalty", (6,)),
+                    ("Strength", (7,)), ("Bulk", (8,)), ("Group", (9,)),
+                    ("Traits", (10, 11)),       # "Armor Traits" split across cols 10-11
+                ),
+            ),
+            # The p278 shields table is 8-wide with already-aligned data but a
+            # garbled header ("Price AC" / "Bonus 1 Speed" / "Penalty B" / "ulk" /
+            # "(Bt)") — an identity column_map restores the real labels. (The
+            # Tower-shield row crams a +2/+4 bonus and a –5 ft. penalty, so its
+            # Price/AC/Speed cells stay mangled; name + Bulk/Hardness/HP/BT correct.)
+            sources.ArmorSchema(
+                detect=("SHIELD", "HARDNESS"),
+                raw_width=8,
+                column_map=(
+                    ("Shield", (0,)), ("Price", (1,)), ("AC Bonus", (2,)),
+                    ("Speed Penalty", (3,)), ("Bulk", (4,)), ("Hardness", (5,)),
+                    ("HP", (6,)), ("BT", (7,)),
+                ),
             ),
         ),
     )
@@ -1446,15 +1466,17 @@ sources.register(
         # canonical layout. The detail tables (7-wide) and the powered-armour table
         # (10-wide with STR/DEX/SLOTS) are already aligned — width + the STR/DEX/
         # SLOTS reject keep them untouched.
-        armor_schema=sources.ArmorSchema(
-            detect=("ARMOUR", "PROTECTION"),
-            reject=("STR", "DEX", "SLOTS"),
-            raw_width=10,
-            column_map=(
-                ("Armour Type", (0,)),
-                ("Protection", (1, 2)),     # value in col 1; long notes spill into col 2
-                ("TL", (4,)), ("Rad", (5,)), ("Kg", (6,)), ("Cost", (7,)),
-                ("Required Skill", (9,)),
+        table_schemas=(
+            sources.ArmorSchema(
+                detect=("ARMOUR", "PROTECTION"),
+                reject=("STR", "DEX", "SLOTS"),
+                raw_width=10,
+                column_map=(
+                    ("Armour Type", (0,)),
+                    ("Protection", (1, 2)),     # value in col 1; long notes spill into col 2
+                    ("TL", (4,)), ("Rad", (5,)), ("Kg", (6,)), ("Cost", (7,)),
+                    ("Required Skill", (9,)),
+                ),
             ),
         ),
         # Armour rows stack a suit's Basic/Improved/Advanced (or multi-TL) grades
