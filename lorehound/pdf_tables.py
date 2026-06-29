@@ -581,20 +581,86 @@ def _split_stacked_tables(rows: list[list[str]]) -> list[list[list[str]]]:
     return segs if len(segs) > 1 else [rows]
 
 
+def _is_catalog_header(r: list[str]) -> bool:
+    """A column-label row of a catalog (``… Price Damage Bulk Hands Group …``): three
+    or more short label cells past the name column, each a real word — digit-free and
+    containing a letter. The letter rule rejects placeholder-laden stat-block rows
+    ('Fuel Scoops —  —'); the no-digit rule rejects data rows ('1 gp', '1d8 S')."""
+    cells = [c.strip() for c in r[1:] if c and c.strip()]
+    return len(cells) >= 3 and all(
+        len(c) <= 25 and any(ch.isalpha() for ch in c) and not any(ch.isdigit() for ch in c)
+        for c in cells
+    )
+
+
+def _catalog_header_sig(r: list[str]) -> tuple:
+    return tuple(c.strip().lower() for c in r[1:] if c and c.strip())
+
+
+def _split_stacked_catalogs(rows: list[list[str]]) -> list[list[list[str]]]:
+    """Split a *catalog* table that find_tables merged from several stacked sub-tables
+    (the Pathfinder weapons page: Simple / Martial / Advanced glued together, each under
+    the same ``… Price Damage Bulk Hands Group …`` header, with section-label rows
+    ('Unarmed') and leaked captions ('TABLE 6–7: MELEE…') between them).
+
+    Split ONLY at a header that REPEATS — the identical column-label signature appearing
+    ≥2×. That repetition is what tells a genuine stacked catalog from a career card or a
+    ship stat block (whose rows look header-ish individually but never repeat a
+    signature), so those aren't shredded. Trailing caption/label rows are trimmed.
+    ``[rows]`` when nothing splits."""
+    if len(rows) < 6:
+        return [rows]
+    from collections import Counter
+
+    counts = Counter(_catalog_header_sig(r) for r in rows if _is_catalog_header(r))
+    repeated = {sig for sig, n in counts.items() if n >= 2}
+    if not repeated:
+        return [rows]
+    hdr_idx = [
+        i for i, r in enumerate(rows)
+        if _is_catalog_header(r) and _catalog_header_sig(r) in repeated
+    ]
+    if len(hdr_idx) < 2:
+        return [rows]
+
+    def is_data(r: list[str]) -> bool:
+        c0 = (r[0] or "").strip()
+        others = [c for c in r[1:] if c and c.strip()]
+        return bool(c0) and any(ch.isalpha() for ch in c0) and len(others) >= 2
+
+    bounds = hdr_idx + [len(rows)]
+    segs = []
+    for a, b in zip(bounds, bounds[1:], strict=False):
+        seg = rows[a:b]
+        while len(seg) > 1 and not is_data(seg[-1]):  # trim trailing caption/label rows
+            seg = seg[:-1]
+        if len(seg) >= 2:                              # header + ≥1 item
+            segs.append(seg)
+    return segs if len(segs) > 1 else [rows]
+
+
 def _split_table_dict(t: dict) -> list[dict]:
-    """Apply :func:`_split_stacked_tables` to a table dict, fanning it out into one
-    dict per recovered sub-table. The first sub-table keeps the parent title; later
-    ones derive theirs from their own header's label column (so the Events half of a
-    Mishaps+Events table isn't left titled 'MISHAPS TABLE')."""
-    segs = _split_stacked_tables(t.get("rows") or [])
-    if len(segs) == 1:
-        return [t]
-    out = [{**t, "rows": segs[0]}]
-    for s in segs[1:]:
-        label = s[0][1].strip() if len(s[0]) >= 2 else ""
-        title = label.title() if label else t.get("title", "")
-        out.append({**t, "title": title, "rows": s})
-    return out
+    """Fan a table dict out into one dict per recovered sub-table — first the roll-table
+    split (Mishaps+Events), then the stacked-catalog split (the Pathfinder weapons
+    blob). Roll halves derive their title from their header's label column; catalog
+    halves from their header's NAME column ('Simple Weapons', 'Martial Weapons'), which
+    also lets the equipment-routing reclassify each half from 'tables' to 'items'."""
+    rows = t.get("rows") or []
+    segs = _split_stacked_tables(rows)
+    if len(segs) > 1:
+        out = [{**t, "rows": segs[0]}]
+        for s in segs[1:]:
+            label = s[0][1].strip() if len(s[0]) >= 2 else ""
+            out.append({**t, "title": label.title() if label else t.get("title", ""), "rows": s})
+        return out
+    segs = _split_stacked_catalogs(rows)
+    if len(segs) > 1:
+        out = []
+        for s in segs:
+            label = s[0][0].strip() if s and s[0] else ""
+            out.append({**t, "title": label or t.get("title", ""), "rows": s})
+        return out
+    return [t]
 
 
 def _dedupe_words(words: list) -> list:
