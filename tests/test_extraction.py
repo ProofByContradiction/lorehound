@@ -235,6 +235,68 @@ class TestTravellerArmorSchema(unittest.TestCase):
         self.assertIsNone(self.SCHEMA.apply(detail))
 
 
+class TestGradeSplit(unittest.TestCase):
+    """GradeSplit.apply — explode a Traveller armour row that stacks N tech-level
+    grades into one cell-row, conservatively (never invent a wrong sub-value)."""
+
+    SPLIT = sources.GradeSplit(detect=("PROTECTION", "TL"), count_label="TL")
+    HDR = ["Armour Type", "Protection", "TL", "Rad", "Kg", "Cost", "Required Skill"]
+
+    def _apply(self, *data):
+        return self.SPLIT.apply([self.HDR, *data])
+
+    def test_comma_graded_name_splits_into_grades(self):
+        out = self._apply(
+            ["Combat Armour, Basic Combat Armour, Improved Combat Armour, Advanced",
+             "+13 +17 +19", "10 12 14", "85 145 180", "20 16 12",
+             "Cr96000 Cr88000 Cr160000", "Vacc Suit 1 Vacc Suit 0 Vacc Suit 0"])
+        self.assertEqual([r[0] for r in out[1:]],
+                         ["Combat Armour, Basic", "Combat Armour, Improved",
+                          "Combat Armour, Advanced"])
+        # stats distributed one per grade
+        self.assertEqual(out[1], ["Combat Armour, Basic", "+13", "10", "85", "20",
+                                  "Cr96000", "Vacc Suit 1"])
+        self.assertEqual(out[3][1], "+19")
+
+    def test_single_name_gets_tl_suffix(self):
+        out = self._apply(
+            ["Combat Armour", "+13 +17 +19", "10 12 14", "85 145 180", "20 16 12",
+             "Cr96000 Cr88000 Cr160000", "None None None"])
+        self.assertEqual([r[0] for r in out[1:]],
+                         ["Combat Armour (TL10)", "Combat Armour (TL12)",
+                          "Combat Armour (TL14)"])
+
+    def test_crammed_repeated_word_name_left_merged(self):
+        # "Poly Carapace" repeats → can't name the grades → keep the row whole
+        row = ["Poly Carapace Lightweight Poly Carapace Advanced Poly Carapace",
+               "+10 +12 +16", "10 11 13", "— — —", "4 2 2",
+               "Cr10000 Cr15000 Cr35000", "None None None"]
+        out = self._apply(row)
+        self.assertEqual(out, [self.HDR, row])
+
+    def test_uniform_skill_distributes_ragged_stays_whole(self):
+        # "Vacc Suit 1 Vacc Suit 0 Vacc Suit 0" shares the lead token → distribute;
+        # "Vacc Suit 0 None" is ragged → kept whole on both grades.
+        uniform = self.SPLIT._cell("Vacc Suit 1 Vacc Suit 0 Vacc Suit 0", 3)
+        self.assertEqual(uniform, ["Vacc Suit 1", "Vacc Suit 0", "Vacc Suit 0"])
+        ragged = self.SPLIT._cell("Vacc Suit 0 None", 2)
+        self.assertEqual(ragged, ["Vacc Suit 0 None", "Vacc Suit 0 None"])
+
+    def test_protection_note_kept_whole(self):
+        # a note makes the grades unequal-shaped → don't guess, keep whole
+        cell = "+22 (+32 vs. fire) +25 (+32 vs. fire)"
+        self.assertEqual(self.SPLIT._cell(cell, 2), [cell, cell])
+
+    def test_single_grade_row_untouched(self):
+        out = self._apply(["Mesh", "+2", "6", "—", "3", "Cr150", "None"])
+        self.assertEqual(out[1], ["Mesh", "+2", "6", "—", "3", "Cr150", "None"])
+        self.assertEqual(len(out), 2)
+
+    def test_non_armor_table_untouched(self):
+        rows = [["NAME", "DAMAGE"], ["Sword", "1d8"]]
+        self.assertIs(self.SPLIT.apply(rows), rows)
+
+
 class TestDedupeAndUnroll(unittest.TestCase):
     """De-dup of double-struck words + unroll of side-by-side repeated columns —
     the Pathfinder ability-modifiers fix."""

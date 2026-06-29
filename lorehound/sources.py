@@ -94,6 +94,100 @@ class ArmorSchema:
         return out
 
 
+@dataclass(frozen=True)
+class GradeSplit:
+    """Explode a catalogue row that crams several tech-level grades into one
+    cell-row — Traveller armour stacks the Basic/Improved/Advanced variants of a
+    suit together: a name like ``Battle Dress, Basic Battle Dress, Improved Battle
+    Dress, Advanced`` over stats ``+22 +25 +28`` / ``Cr200000 Cr220000 Cr440000``.
+
+    The split is deliberately conservative — it never invents a wrong sub-value:
+      • N (the grade count) is the whitespace-token count of the ``count_label``
+        column (TL — one plain integer per grade).
+      • The name splits on its repeated ``base,`` grade list; a single clean base
+        name (no repeated word) instead gets a ``(<count_label><n>)`` suffix; an
+        unparseable / crammed name leaves the whole row merged.
+      • Each remaining cell is distributed one-token-per-grade only when it holds
+        exactly N tokens, or N *identical* chunks (``Vacc Suit 1 Vacc Suit 1 Vacc
+        Suit 1``); anything else (a ragged ``Vacc Suit 0 None`` skill, a protection
+        value carrying a note) is kept whole on every grade rather than guessed."""
+    detect: tuple[str, ...]      # whole-word header markers (upper) identifying an explodable table
+    count_label: str             # header label whose cell token-count gives N (e.g. "TL")
+
+    def apply(self, rows: list[list[str]]) -> list[list[str]]:
+        import re
+
+        if not rows or len(rows) < 2:
+            return rows
+        hdr = " ".join(rows[0]).upper()
+        if not all(re.search(rf"\b{re.escape(w)}\b", hdr) for w in self.detect):
+            return rows
+        ccol = next(
+            (j for j, h in enumerate(rows[0]) if h.strip().upper() == self.count_label.upper()),
+            None,
+        )
+        if ccol is None:
+            return rows
+        out: list[list[str]] = [rows[0]]
+        changed = False
+        for r in rows[1:]:
+            grades = self._split_row(r, ccol)
+            if grades is None:
+                out.append(r)
+            else:
+                out.extend(grades)
+                changed = True
+        return out if changed else rows
+
+    def _split_row(self, row: list[str], ccol: int) -> list[list[str]] | None:
+        if ccol >= len(row):
+            return None
+        n = len(row[ccol].split())
+        if n < 2:
+            return None
+        names = self._split_name(row, ccol, n)
+        if names is None:
+            return None
+        return [
+            [names[gi]] + [self._cell(row[j], n)[gi] for j in range(1, len(row))]
+            for gi in range(n)
+        ]
+
+    @staticmethod
+    def _cell(cell: str, n: int) -> list[str]:
+        """One value per grade. A clean N-token cell distributes one token each.
+        Otherwise, if the cell divides into N equal chunks that share a common
+        first token — the parallel ``Vacc Suit 1 Vacc Suit 0 Vacc Suit 0`` skill
+        shape — distribute those chunks. Anything ragged (``Vacc Suit 0 None``, a
+        protection value carrying a note) stays whole on every grade rather than
+        risk a wrong sub-value."""
+        toks = cell.split()
+        if len(toks) == n:
+            return toks
+        if toks and len(toks) % n == 0:
+            size = len(toks) // n
+            chunks = [toks[i * size : (i + 1) * size] for i in range(n)]
+            if len({c[0] for c in chunks}) == 1:    # uniform shape → safe to distribute
+                return [" ".join(c) for c in chunks]
+        return [cell] * n
+
+    def _split_name(self, row: list[str], ccol: int, n: int) -> list[str] | None:
+        import re
+
+        name = (row[0] or "").strip()
+        if "," in name:                                   # "<base>, <g1> <base>, <g2> ..."
+            base = name.split(",", 1)[0].strip()
+            if base:
+                parts = [p.strip() for p in re.split(rf"(?={re.escape(base)},)", name) if p.strip()]
+                if len(parts) == n:
+                    return parts
+        words = re.findall(r"[A-Za-z]{3,}", name)         # single clean base name → (TLn) suffix
+        if name and len(name.split()) <= 4 and len(words) == len({w.lower() for w in words}):
+            grades = row[ccol].split()
+            return [f"{name} ({self.count_label}{grades[i]})" for i in range(n)]
+        return None                                       # crammed / unparseable — leave merged
+
+
 @dataclass
 class SourceProfile:
     name: str
@@ -118,6 +212,9 @@ class SourceProfile:
     # (name split across columns, mis-bucketed headers). Applied at index time to
     # repair the cell grid before routing/rendering — no re-extraction needed.
     armor_schema: ArmorSchema | None = None
+    # Catalogue rows that stack several tech-level grades into one (Traveller
+    # armour). Exploded into one row per grade after armor_schema repair.
+    grade_split: GradeSplit | None = None
 
     def matches(self, game: str) -> bool:
         g = (game or "").lower()
@@ -136,7 +233,9 @@ class SourceProfile:
         if self.armor_schema:
             fixed = self.armor_schema.apply(rows)
             if fixed is not None:
-                return fixed
+                rows = fixed
+        if self.grade_split:
+            rows = self.grade_split.apply(rows)
         return rows
 
 
