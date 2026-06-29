@@ -286,6 +286,8 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
             rendered, wide, item_name = render_item(c.rows, query)
             if item_name:  # matched a single item → use its name as the header
                 heading = item_name[:250]
+            elif "›" in c.section:  # stat-block card (ship / wrapped weapon): name is the leaf
+                heading = c.section.split("›")[-1].strip()[:250]
         else:
             rendered, wide = render_table(c.rows)
         note = (

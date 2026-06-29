@@ -503,6 +503,49 @@ class TestItemCard(unittest.TestCase):
         self.assertEqual(name, "M16")
 
 
+class TestWrappedStatblock(unittest.TestCase):
+    """T2K weapon sidebar cards are a wrapped 2×6 stat block (label row / value row,
+    twice) with the name in the heading — flatten to a clean Stat | Value card."""
+
+    M249 = [
+        ["TYPE", "AMMO", "REL", "ROF", "DAMAGE", "CRIT"],
+        ["LMG", "5.56x45", "5", "6", "2", "3"],
+        ["BLAST", "RANGE", "MAG", "ARMOR", "WEIGHT", "PRICE"],
+        ["–", "6", "200", "0", "2", "1,000"],
+    ]
+
+    def test_pairs_flattened_in_order(self):
+        from lorehound.tables import _wrapped_statblock_pairs
+
+        pairs = _wrapped_statblock_pairs(self.M249)
+        self.assertEqual(pairs[0], ("TYPE", "LMG"))
+        self.assertEqual(pairs[6], ("BLAST", "–"))      # second label/value pair starts here
+        self.assertEqual(dict(pairs)["PRICE"], "1,000")
+        self.assertEqual(len(pairs), 12)
+
+    def test_render_item_makes_stat_card(self):
+        from lorehound.tables import render_item
+
+        block, _wide, name = render_item(self.M249, "M249")
+        self.assertIsNone(name)                          # name is in the heading, not the grid
+        self.assertIn("TYPE", block)
+        self.assertIn("LMG", block)
+        self.assertIn("PRICE", block)
+        self.assertNotIn("BLAST RANGE", block)           # not the raw wrapped header row
+
+    def test_normal_table_not_detected_as_wrapped(self):
+        from lorehound.tables import _wrapped_statblock_pairs
+
+        # header + 3 data rows: even-index rows 0 & 2 are header / data-with-digits
+        rows = [["WEAPON", "DAMAGE"], ["M16", "3"], ["AK-47", "4"], ["UZI", "1"]]
+        self.assertIsNone(_wrapped_statblock_pairs(rows))
+
+    def test_two_row_grid_not_wrapped(self):
+        from lorehound.tables import _wrapped_statblock_pairs
+
+        self.assertIsNone(_wrapped_statblock_pairs([["WEAPON", "DAMAGE"], ["M16", "3"]]))
+
+
 class TestRelevanceCutoff(unittest.TestCase):
     def test_min_rel_drops_weak_partials(self):
         from lorehound.search_index import Chunk, SearchIndex

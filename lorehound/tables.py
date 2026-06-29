@@ -61,6 +61,35 @@ def is_ship_statblock(rows: list[list[str]]) -> bool:
     return hits >= max(3, len(col0) // 2)
 
 
+def _wrapped_statblock_pairs(grid: list[list[str]]) -> list[tuple[str, str]] | None:
+    """If ``grid`` is a *wrapped* single-item stat block — the item's stats laid out
+    as alternating label/value rows (T2K weapon cards: row 0 ``TYPE AMMO REL …`` over
+    row 1 its values, then row 2 ``BLAST RANGE MAG …`` over row 3 its values), with
+    the item name in the page heading rather than a column — return the flattened
+    ``(label, value)`` pairs, else ``None``.
+
+    Detected by shape, not vocabulary, so it isn't tied to one system: an even row
+    count (≥4), every even-index row a run of ≥2 short *digit-free* labels paired
+    with the value row beneath it. A normal data table fails this — the rows after
+    its header carry digits."""
+    n = len(grid)
+    if n < 4 or n % 2:
+        return None
+    pairs: list[tuple[str, str]] = []
+    for i in range(0, n, 2):
+        labels, values = grid[i], grid[i + 1]
+        cells = [c.strip() for c in labels if c and c.strip()]
+        if len(cells) < 2 or not all(
+            len(c) <= 12 and any(ch.isalpha() for ch in c) and not any(ch.isdigit() for ch in c)
+            for c in cells
+        ):
+            return None
+        for j, label in enumerate(labels):
+            if label.strip():
+                pairs.append((label.strip(), values[j].strip() if j < len(values) else ""))
+    return pairs
+
+
 def _wrap_cell(text: str, width: int) -> list[str]:
     if not text:
         return [""]
@@ -203,6 +232,12 @@ def render_table(rows: list[list[str]]) -> tuple[str, bool]:
         block, wide = _statblock_card(grid)
         if block:
             return block, wide
+    # A wrapped stat block (alternating label/value rows) flattens to a clean card.
+    pairs = _wrapped_statblock_pairs(grid)
+    if pairs:
+        block, wide = _stat_card(pairs)
+        if block:
+            return block, wide
     ncols = max(len(r) for r in grid)
     grid = [r + [""] * (ncols - len(r)) for r in grid]
 
@@ -302,6 +337,13 @@ def render_item(rows: list[list[str]], query: str) -> tuple[str, bool, str | Non
     # match against. The ship name comes from the chunk's heading, not the grid.
     if is_ship_statblock(grid):
         block, wide = _statblock_card(grid)
+        if block:
+            return block, wide, None
+    # A wrapped stat block (T2K weapon cards: alternating label/value rows, name in
+    # the heading) — flatten it to a Stat | Value card. Name comes from the heading.
+    pairs = _wrapped_statblock_pairs(grid)
+    if pairs:
+        block, wide = _stat_card(pairs)
         if block:
             return block, wide, None
     # A single-item grid (header + one row, e.g. an exploded catalog pick) always
