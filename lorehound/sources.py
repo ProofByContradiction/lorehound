@@ -50,32 +50,29 @@ class CareerGeometry:
 @dataclass(frozen=True)
 class ArmorSchema:
     """Canonical column layout for an armor catalogue that ``find_tables``
-    mis-segments — it splits the item name across the first ``name_cols`` columns
-    ("Chain"|"shirt"), splits the trailing label across the last ``tail_cols``
-    ("Flexible,"|"noisy"), and mis-buckets the middle header words ("Dex Cap
-    Check" / "Penalty Speed"). ``apply`` recognises such a table by its header
-    signature + width and remaps every data row to ``columns`` — keeping the
-    system-specific layout here as *data* on the registry, not as special cases in
-    generic extraction code.
+    mis-segments. ``column_map`` is the heart: each entry ``(label, indices)``
+    names an output column and the raw source-column index/indices whose cells are
+    joined (with spaces) to fill it — so a name split across two cells (PF
+    "Chain"|"shirt" → ``(0, 1)``), a value that spilled into the header's empty
+    cell (Traveller protection note → ``(1, 2)``), and dropped junk/empty columns
+    are all expressed as data, not special-cased in generic extraction code.
 
-    Width bookkeeping: a raw row is ``name_cols`` (joined → name) + middle +
-    ``tail_cols`` (joined → last column); the middle count is ``len(columns) - 2``
-    (the name column and the tail column), so ``raw_width`` reconstructs the
-    expected raw column count the detector gates on."""
-    detect: tuple[str, ...]              # whole-word header markers, ALL required (upper-cased)
-    columns: tuple[str, ...]             # canonical labels incl. the leading name column
-    name_cols: int = 2                   # leading raw columns joined into the item name
-    tail_cols: int = 2                   # trailing raw columns joined into the last column
+    ``apply`` only fires when the raw header has exactly ``raw_width`` columns, all
+    ``detect`` markers are present, and no ``reject`` marker is — so a sibling
+    layout of the same width (Traveller's STR/DEX/SLOTS powered armour vs. the
+    mis-bucketed master table) is left untouched."""
+    detect: tuple[str, ...]                          # whole-word header markers, ALL required (upper)
+    column_map: tuple[tuple[str, tuple[int, ...]], ...]  # (output label, raw col indices joined)
+    raw_width: int                                   # exact raw column count this layout has
+    reject: tuple[str, ...] = ()                     # header markers that DISqualify the match
 
     @property
-    def raw_width(self) -> int:
-        return self.name_cols + (len(self.columns) - 2) + self.tail_cols
+    def columns(self) -> tuple[str, ...]:
+        return tuple(label for label, _ in self.column_map)
 
     def apply(self, rows: list[list[str]]) -> list[list[str]] | None:
         """Return ``rows`` remapped to ``columns`` if this is a matching armor
-        table, else ``None`` (so the caller keeps the original). Gated on exact
-        raw width + every ``detect`` marker present, so it never fires on a
-        differently-shaped table."""
+        table, else ``None`` (so the caller keeps the original)."""
         import re
 
         if not rows or len(rows[0]) != self.raw_width:
@@ -83,15 +80,17 @@ class ArmorSchema:
         hdr = " ".join(rows[0]).upper()
         if not all(re.search(rf"\b{re.escape(w)}\b", hdr) for w in self.detect):
             return None
+        if any(re.search(rf"\b{re.escape(w)}\b", hdr) for w in self.reject):
+            return None
         out: list[list[str]] = [list(self.columns)]
         for r in rows[1:]:
             if len(r) != self.raw_width:     # ragged row — leave untouched
                 out.append(r)
                 continue
-            name = " ".join(c.strip() for c in r[: self.name_cols] if c and c.strip())
-            tail = " ".join(c.strip() for c in r[-self.tail_cols :] if c and c.strip())
-            mid = list(r[self.name_cols : self.raw_width - self.tail_cols])
-            out.append([name, *mid, tail])
+            out.append([
+                " ".join(r[i].strip() for i in idxs if i < len(r) and r[i] and r[i].strip())
+                for _, idxs in self.column_map
+            ])
         return out
 
 
