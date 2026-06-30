@@ -626,6 +626,61 @@ def _build_catalog_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tupl
     return {k: [(n, card) for n, card, _ in v.values()] for k, v in out.items()}
 
 
+_SMALL_WORDS = {"of", "the", "and", "in", "to", "a", "an", "vs", "from",
+                "with", "on", "at", "by", "for", "or", "into", "your"}
+
+
+def _titlecase(s: str) -> str:
+    """Title-case a book's ALL-CAPS entry name ("CLOAK OF COLORS" → "Cloak of
+    Colors"), keeping small connecting words lower except in the first position."""
+    words = s.split()
+    return " ".join(
+        w.capitalize() if i == 0 or w.lower() not in _SMALL_WORDS else w.lower()
+        for i, w in enumerate(words)
+    )
+
+
+_STAT_BOX_GROUP = {"FEAT": "Feats", "SPELL": "Spells", "CANTRIP": "Spells",
+                   "FOCUS": "Focus Spells", "RITUAL": "Rituals"}
+
+
+def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
+    """Build spell/feat cards from the boxed entries in a book's extracted markdown
+    (see :mod:`stat_boxes`). Each box → one searchable card chunk: the level + fields
+    as a label/value grid, the prose description carried in ``Chunk.description``."""
+    from .stat_boxes import parse_stat_boxes
+
+    game, book = _split_game_and_file(path)
+    chunks: list[Chunk] = []
+    for box in parse_stat_boxes(text):
+        name = _titlecase(box.name)
+        group = _STAT_BOX_GROUP.get(box.kind, "Spells")
+        rows = [["Level", str(box.level)]] + [[lbl, val] for lbl, val in box.fields]
+        flat = " ".join(val for _, val in box.fields)
+        chunks.append(Chunk(
+            game=game, source=book, category=box.category,
+            section=f"{group} › {name}",
+            locator=f"p. {box.page}" if box.page else "",
+            text=f"{name} {box.kind.title()} {flat} {box.description}".strip(),
+            rows=rows, description=box.description,
+        ))
+    return chunks
+
+
+def _build_stat_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tuple[str, Chunk]]]:
+    """Per (game, category) name→card list for stat-box chunks (spell/feat), so
+    /spell and /feat resolve a name straight to its card (same shape as the catalog
+    cards, reusing catalog_card_lookup + catalog_names). Each box is its own card."""
+    from collections import defaultdict
+
+    out: dict[tuple[str, str], dict[str, tuple[str, Chunk]]] = defaultdict(dict)
+    for c in chunks:
+        if c.category in ("spell", "feat") and c.rows:
+            name = c.section.split("›")[-1].strip()
+            out[(c.game, c.category)].setdefault(name.lower(), (name, c))
+    return {k: list(v.values()) for k, v in out.items()}
+
+
 class RulesService:
     def __init__(self, drive: DriveClient | None) -> None:
         self.drive = drive
@@ -687,6 +742,7 @@ class RulesService:
             for doc in docs:
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
                 chunks.extend(_tables_for_doc(doc.name, doc.tables))
+                chunks.extend(_stat_box_chunks_for_doc(doc.name, doc.text))
                 # Parse any prose-only chargen tables (e.g. T2K childhood) for games
                 # with a chargen system, so the flow can read them from the index.
                 game, _book = _split_game_and_file(doc.name)
@@ -700,6 +756,12 @@ class RulesService:
             careers = detect_careers(chunks)
             catalog = _build_catalog_names(chunks)
             catalog_cards = _build_catalog_cards(chunks)
+            # Stat-box cards (spell/feat) reuse the catalog card/name machinery so
+            # /spell and /feat resolve a name straight to its card like /item does.
+            stat_cards = _build_stat_cards(chunks)
+            catalog_cards.update(stat_cards)
+            for key, cards in stat_cards.items():
+                catalog[key] = sorted(name for name, _ in cards)
             # Atomic swap: reference assignment is safe under the GIL, so a reader on
             # the event-loop thread sees the old index until this point, then the new.
             self.index = index

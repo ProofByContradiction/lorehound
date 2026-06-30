@@ -74,6 +74,7 @@ class Chunk:
     locator: str         # "p. 69"
     text: str
     rows: list[list[str]] = field(default_factory=list)  # cell grid (tables only)
+    description: str = ""  # prose body of a stat-box card (spell/feat), kept apart from text
     tokens: list[str] = field(default_factory=list)
     heading_terms: set[str] = field(default_factory=set)
 

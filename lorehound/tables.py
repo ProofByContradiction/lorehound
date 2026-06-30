@@ -225,6 +225,16 @@ def _statblock_card(grid: list[list[str]]) -> tuple[str, bool]:
     )
 
 
+def render_stat_box(rows: list[list[str]], description: str = "") -> tuple[str, bool]:
+    """A spell/feat card: the (label, value) rows as a Stat | Value block, then the
+    prose description below the block. Returns ``(block, wide)``."""
+    pairs = [(r[0].strip(), r[1].strip()) for r in rows if len(r) >= 2 and r[1].strip()]
+    block, wide = _stat_card(pairs)
+    if description:
+        block = f"{block}\n{description}".strip() if block else description
+    return block, wide
+
+
 def render_table(rows: list[list[str]]) -> tuple[str, bool]:
     """Render a cell grid (first row = header) as a clean monospace table.
 

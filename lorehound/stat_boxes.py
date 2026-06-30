@@ -83,10 +83,14 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
         clean_body = "\n".join(lines)
 
         fields: list[tuple[str, str]] = []
+        seen_labels: set[str] = set()
         for fm in _FIELD.finditer(clean_body):
             label, value = _clean(fm.group(1)), _clean(fm.group(2))
-            if value and _FIELD_LABEL.match(label):
+            # Keep the first value per label: PF lays feats out in interleaved
+            # columns, so a box can pick up a neighbour's repeated **Prerequisites**.
+            if value and _FIELD_LABEL.match(label) and label not in seen_labels:
                 fields.append((label, value))
+                seen_labels.add(label)
         description = _clean(" ".join(ln for ln in lines if "**" not in ln))
 
         boxes.append(StatBox(

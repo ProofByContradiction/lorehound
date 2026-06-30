@@ -69,3 +69,13 @@ class TestParseStatBoxes(unittest.TestCase):
 
     def test_returns_statbox_instances(self):
         self.assertIsInstance(self.boxes["FIREBALL"], StatBox)
+
+    def test_repeated_field_label_keeps_first(self):
+        # interleaved-column bleed can repeat **Prerequisites** — keep the first
+        md = ("##### **DREAD STRIKER FEAT 4**\n"
+              "**Prerequisites** master in Perception\n"
+              "You capitalize on fear.\n"
+              "**Prerequisites** Nimble Dodge\n")
+        box = parse_stat_boxes(md)[0]
+        prereqs = [v for k, v in box.fields if k == "Prerequisites"]
+        self.assertEqual(prereqs, ["master in Perception"])
