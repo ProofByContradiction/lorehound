@@ -40,7 +40,7 @@ class TestParseStatBoxes(unittest.TestCase):
     def test_fields_parsed_including_two_on_one_line(self):
         f = dict(self.boxes["FIREBALL"].fields)
         self.assertEqual(f["Traditions"], "arcane, primal")
-        self.assertEqual(f["Range"], "500 feet;")     # value stops at the next **Area**
+        self.assertEqual(f["Range"], "500 feet")       # stops at **Area**, trailing ; dropped
         self.assertEqual(f["Area"], "20-foot burst")
         self.assertEqual(f["Saving Throw"], "basic Reflex")
 

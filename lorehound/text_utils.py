@@ -8,6 +8,71 @@ has a different regex / min-length tuned to its job, so they stay local.)
 
 from __future__ import annotations
 
+import re
+from functools import lru_cache
+
+_WORD_PATHS = ("/usr/share/dict/words", "/usr/dict/words")
+# Domain words the BSD/system dictionary (web2) lacks, so the ligature repair will
+# accept these reconstructions.
+_EXTRA_WORDS = frozenset({
+    "pathfinder", "reflex", "modifier", "modifiers", "cantrip", "cantrips",
+    "spellcasting", "darkvision", "feats",
+    # Common words web2 lacks that would otherwise be "repaired" into a real word
+    # — "feet"→"fleet", the "ft" abbreviation→"fit". Protect them explicitly.
+    "feet", "ft",
+})
+
+
+@lru_cache(maxsize=1)
+def _wordset() -> frozenset[str]:
+    """The system word list (lower-cased) plus a few domain words, loaded once."""
+    for path in _WORD_PATHS:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                return frozenset(w.strip().lower() for w in fh if w.strip()) | _EXTRA_WORDS
+        except OSError:
+            continue
+    return _EXTRA_WORDS  # no system dictionary present — repair stays a near no-op
+
+
+def _known(word: str, words: frozenset[str]) -> bool:
+    w = word.lower()
+    if w in words:
+        return True
+    for suf in ("s", "es", "ed", "ing"):  # web2 omits many inflections
+        if w.endswith(suf) and len(w) > len(suf) + 1 and w[: -len(suf)] in words:
+            return True
+    return False
+
+
+_LIG_TOKEN = re.compile(r"[A-Za-z]+")
+
+
+def repair_ligatures(text: str) -> str:
+    """Repair ``fi``/``fl`` ligatures that a broken font CMap collapsed to a bare
+    ``f`` during extraction ("fre"→"fire", "Refex"→"Reflex", "difcult"→"difficult").
+
+    A token already in the dictionary is left untouched (so "from" / "free" /
+    "after" are safe); otherwise the ``i`` / ``l`` / ``fi`` / ``fl`` that makes a
+    real word is restored. Index-time only; with no system word list it's a no-op."""
+    words = _wordset()
+    if len(words) < 1000:  # no real dictionary loaded — don't guess
+        return text
+
+    def fix(m: re.Match) -> str:
+        tok = m.group(0)
+        if "f" not in tok.lower() or _known(tok, words):
+            return tok
+        for i, ch in enumerate(tok):
+            if ch.lower() == "f":
+                for ins in ("i", "l", "fi", "fl"):
+                    cand = tok[: i + 1] + ins + tok[i + 1 :]
+                    if _known(cand, words):
+                        return cand
+        return tok
+
+    return _LIG_TOKEN.sub(fix, text)
+
 
 def acronym_title(s: str) -> str:
     """Normalize an ALL-CAPS label/name for display ("REQUIREMENTS" -> "Requirements",
