@@ -551,6 +551,47 @@ class TestItemCard(unittest.TestCase):
         self.assertEqual(name, "M16")
 
 
+class TestStatBoxCards(unittest.TestCase):
+    """Spell/feat stat-box cards: markdown → searchable chunk → name→card lookup
+    → rendered card (level + fields block, then the prose)."""
+
+    MD = ("[[page 339]]\n##### **FIREBALL SPELL 3**\n"
+          "**Traditions** arcane, primal\n"
+          "**Range** 500 feet; **Area** 20-foot burst\n"
+          "A roaring blast of fire deals 6d6 fire damage.\n")
+
+    def _chunks(self):
+        from lorehound.rules import _stat_box_chunks_for_doc
+        return _stat_box_chunks_for_doc("Pathfinder (2e)/Core.pdf", self.MD)
+
+    def test_chunk_built_with_category_and_fields(self):
+        c = self._chunks()[0]
+        self.assertEqual(c.category, "spell")
+        self.assertEqual(c.section, "Spells › Fireball")     # title-cased name as the leaf
+        self.assertEqual(c.locator, "p. 339")
+        self.assertEqual(c.rows[0], ["Level", "3"])          # level prepended
+        self.assertIn(["Area", "20-foot burst"], c.rows)
+        self.assertIn("6d6 fire damage", c.description)
+
+    def test_titlecase_keeps_small_words_lower(self):
+        from lorehound.rules import _titlecase
+        self.assertEqual(_titlecase("CLOAK OF COLORS"), "Cloak of Colors")
+        self.assertEqual(_titlecase("FIREBALL"), "Fireball")
+
+    def test_build_stat_cards_resolves_by_name(self):
+        from lorehound.rules import _build_stat_cards
+        cards = _build_stat_cards(self._chunks())[("Pathfinder (2e)", "spell")]
+        self.assertEqual([n for n, _ in cards], ["Fireball"])
+
+    def test_render_stat_box_card(self):
+        from lorehound.tables import render_stat_box
+        c = self._chunks()[0]
+        block, _wide = render_stat_box(c.rows, c.description)
+        self.assertIn("Level", block)
+        self.assertIn("Traditions", block)
+        self.assertIn("6d6 fire damage", block)              # description below the block
+
+
 class TestWrappedStatblock(unittest.TestCase):
     """T2K weapon sidebar cards are a wrapped 2×6 stat block (label row / value row,
     twice) with the name in the heading — flatten to a clean Stat | Value card."""

@@ -23,7 +23,7 @@ from discord.ext import commands
 from .. import ui
 from ..rules import ReindexInProgress, RulesService, table_topic
 from ..search_index import Chunk, SearchHit, name_match_score
-from ..tables import _name_col, render_item, render_table
+from ..tables import _name_col, render_item, render_stat_box, render_table
 from ..text_utils import clean_grid
 
 TEAL = discord.Colour.dark_teal()
@@ -49,6 +49,8 @@ CATEGORIES: dict[str, _Category] = {
     "transport": _Category("🚙", "Transport", discord.Colour.blue(), True),
     "tables": _Category("📊", "Tables", discord.Colour.green(), True),
     "card": _Category("🪖", "Careers", discord.Colour.dark_red(), True),
+    "spell": _Category("✨", "Spell", discord.Colour.purple(), True),
+    "feat": _Category("🎯", "Feat", discord.Colour.dark_orange(), True),
     # Excluded from /lookup; emoji/label/accent match the old unknown-category
     # fallbacks (📖 / "" / TEAL) so any stray reference hit renders identically.
     "reference": _Category("📖", "", TEAL, False),
@@ -199,6 +201,14 @@ async def _transport_name_autocomplete(interaction, current):  # noqa: ANN001
     return await _catalog_autocomplete(interaction, current, "transport")
 
 
+async def _spell_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _catalog_autocomplete(interaction, current, "spell")
+
+
+async def _feat_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _catalog_autocomplete(interaction, current, "feat")
+
+
 async def _book_autocomplete(
     interaction: discord.Interaction, current: str
 ) -> list[app_commands.Choice[str]]:
@@ -282,7 +292,12 @@ def _detail_items(hit: SearchHit, query: str) -> list[discord.ui.Item]:
     if c.rows:  # any table chunk (rules table, weapon/vehicle stat block)
         # For gear lookups, pull just the matching item's row as a Stat|Value card
         # titled by the item name; for rules tables show the whole table.
-        if c.category in ("items", "transport"):
+        if c.category in ("spell", "feat"):
+            # A stat-box card: level + fields as a Stat|Value block, then the prose.
+            rendered, wide = render_stat_box(c.rows, c.description)
+            if "›" in c.section:
+                heading = c.section.split("›")[-1].strip()[:250]
+        elif c.category in ("items", "transport"):
             rendered, wide, item_name = render_item(c.rows, query)
             if item_name:  # matched a single item → use its name as the header
                 heading = item_name[:250]
@@ -616,6 +631,16 @@ class RulesCog(commands.Cog):
                 hits = _merge_item_hits(direct, _explode_to_items(hits, query))[:25]
                 if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
                     selected = 0
+            elif category in ("spell", "feat"):
+                # Each spell/feat is its own card — resolve the name directly. Fall
+                # back to the BM25 hits (description match) only when nothing names it.
+                direct = self.rules.catalog_card_lookup(
+                    game, category, query, book=chosen_book
+                )
+                if direct:
+                    hits = direct[:25]
+                    if hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
+                        selected = 0
         scope = f"**{game}**" + (f" › **{chosen_book}**" if chosen_book else "")
         if not hits:
             await interaction.response.send_message(
@@ -719,6 +744,46 @@ class RulesCog(commands.Cog):
         book: str | None = None,
     ) -> None:
         await self._lookup(interaction, "transport", source, query, book)
+
+    @app_commands.command(
+        name="spell", description="Show a SPELL/cantrip/focus/ritual card."
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        query="A spell — pick from the list, or type to search",
+        book="Optional: narrow to a single book",
+    )
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_spell_name_autocomplete, book=_book_autocomplete
+    )
+    async def spell(
+        self,
+        interaction: discord.Interaction,
+        source: str,
+        query: str,
+        book: str | None = None,
+    ) -> None:
+        await self._lookup(interaction, "spell", source, query, book)
+
+    @app_commands.command(
+        name="feat", description="Show a FEAT card — prerequisites & effect."
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        query="A feat — pick from the list, or type to search",
+        book="Optional: narrow to a single book",
+    )
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_feat_name_autocomplete, book=_book_autocomplete
+    )
+    async def feat(
+        self,
+        interaction: discord.Interaction,
+        source: str,
+        query: str,
+        book: str | None = None,
+    ) -> None:
+        await self._lookup(interaction, "feat", source, query, book)
 
     @app_commands.command(
         name="class",
