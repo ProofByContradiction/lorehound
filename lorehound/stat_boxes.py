@@ -21,6 +21,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .text_utils import repair_ligatures
+
 # Box kinds we recognise in the heading (Pathfinder). The heading is
 # ``NAME <KIND> <LEVEL>`` — e.g. "FIREBALL SPELL 3", "POWER ATTACK FEAT 1".
 KINDS = ("SPELL", "CANTRIP", "FOCUS", "RITUAL", "FEAT")
@@ -85,13 +87,15 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
         fields: list[tuple[str, str]] = []
         seen_labels: set[str] = set()
         for fm in _FIELD.finditer(clean_body):
-            label, value = _clean(fm.group(1)), _clean(fm.group(2))
+            # trailing ';'/',' is the separator before the next inline **Field** ("500
+            # feet; **Area** ...") — drop it so the value reads "500 feet".
+            label, value = _clean(fm.group(1)), _clean(fm.group(2)).rstrip(" ;,")
             # Keep the first value per label: PF lays feats out in interleaved
             # columns, so a box can pick up a neighbour's repeated **Prerequisites**.
             if value and _FIELD_LABEL.match(label) and label not in seen_labels:
-                fields.append((label, value))
+                fields.append((label, repair_ligatures(value)))
                 seen_labels.add(label)
-        description = _clean(" ".join(ln for ln in lines if "**" not in ln))
+        description = repair_ligatures(_clean(" ".join(ln for ln in lines if "**" not in ln)))
 
         boxes.append(StatBox(
             name=_clean(m.group("name")),

@@ -649,11 +649,12 @@ def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
     (see :mod:`stat_boxes`). Each box → one searchable card chunk: the level + fields
     as a label/value grid, the prose description carried in ``Chunk.description``."""
     from .stat_boxes import parse_stat_boxes
+    from .text_utils import repair_ligatures
 
     game, book = _split_game_and_file(path)
     chunks: list[Chunk] = []
     for box in parse_stat_boxes(text):
-        name = _titlecase(box.name)
+        name = repair_ligatures(_titlecase(box.name))
         group = _STAT_BOX_GROUP.get(box.kind, "Spells")
         rows = [["Level", str(box.level)]] + [[lbl, val] for lbl, val in box.fields]
         flat = " ".join(val for _, val in box.fields)
