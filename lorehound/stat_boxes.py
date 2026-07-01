@@ -81,7 +81,18 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
         end = heads[i + 1].start() if i + 1 < len(heads) else m.end() + 1200
         body = text[m.end():end]
         # drop watermark / page-marker / running-header noise lines
-        lines = [ln for ln in body.split("\n") if ln.strip() and not _NOISE_LINE.search(ln)]
+        raw = [ln.strip() for ln in body.split("\n") if ln.strip() and not _NOISE_LINE.search(ln)]
+        # Merge a wrapped continuation — a non-label line starting lowercase — into
+        # the previous line, so a field value that wraps to the next visual line keeps
+        # its tail ("...1 undead" + "creature") instead of leaking it into the
+        # description. The description's own first line starts with a capital, so it
+        # isn't absorbed into the last field.
+        lines: list[str] = []
+        for ln in raw:
+            if lines and not ln.startswith("**") and ln[:1].islower():
+                lines[-1] = f"{lines[-1]} {ln}"
+            else:
+                lines.append(ln)
         clean_body = "\n".join(lines)
 
         fields: list[tuple[str, str]] = []

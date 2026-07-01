@@ -70,6 +70,19 @@ class TestParseStatBoxes(unittest.TestCase):
     def test_returns_statbox_instances(self):
         self.assertIsInstance(self.boxes["FIREBALL"], StatBox)
 
+    def test_wrapped_field_value_absorbs_continuation(self):
+        # a field value that wraps to the next visual line keeps its tail instead of
+        # leaking the first word into the description
+        md = ("##### **HEAL SPELL 1**\n"
+              "**Targets** 1 willing living creature or 1 undead\n"
+              "creature\n"
+              "You channel positive energy to heal.\n")
+        box = parse_stat_boxes(md)[0]
+        self.assertEqual(dict(box.fields)["Targets"],
+                         "1 willing living creature or 1 undead creature")
+        self.assertTrue(box.description.startswith("You channel"))
+        self.assertNotIn("creature You", box.description)
+
     def test_repeated_field_label_keeps_first(self):
         # interleaved-column bleed can repeat **Prerequisites** — keep the first
         md = ("##### **DREAD STRIKER FEAT 4**\n"
