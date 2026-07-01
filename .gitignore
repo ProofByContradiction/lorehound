@@ -37,3 +37,4 @@ table-audit/
 # Bot runtime (managed by the `lorehound` shell function)
 bot.log
 .bot.pid
+reextract.log
