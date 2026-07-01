@@ -68,7 +68,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
 # Markdown extraction lineage. Bump when the to_markdown path itself changes so
 # stale Markdown is recomputed even though the source file is unchanged.
-MD_VERSION = "pymupdf-md-styleheadings-v1"
+MD_VERSION = "pymupdf-md-styleheadings-v2-spellboxes"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
 TABLE_VERSION = "find-tables-lines-v18-split-stacked-catalogs"
@@ -248,6 +248,7 @@ class DriveClient:
         import pymupdf4llm
 
         from .headings import StyleHeadings, demote_noise_doc, inject_toc_headings
+        from .stat_box_extract import page_spell_boxes
 
         # 0.3.4 is ML-free already; guard for 1.27.x where use_layout() exists.
         if hasattr(pymupdf4llm, "use_layout"):
@@ -263,6 +264,15 @@ class DriveClient:
             ]
             texts = demote_noise_doc(texts)          # drop page-numbers / repeated labels
             texts = inject_toc_headings(doc, texts)  # add publisher ToC chapter headings
+            # Recover boxed spell/feat entries pymupdf4llm scrambles on dense
+            # multi-column pages (self-gating on the Paizo heading font), appending
+            # them so stat_boxes can parse them. A clean inline box already in the
+            # text wins on dedup; this fills the ones that were lost.
+            for i, page in enumerate(doc):
+                if i < len(texts):
+                    boxes = page_spell_boxes(page)
+                    if boxes:
+                        texts[i] = f"{texts[i]}\n\n{boxes}"
         finally:
             doc.close()
         return "\n\n".join(f"[[page {i}]]\n{t}" for i, t in enumerate(texts, start=1))

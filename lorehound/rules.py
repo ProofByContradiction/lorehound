@@ -653,7 +653,12 @@ def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
 
     game, book = _split_game_and_file(path)
     chunks: list[Chunk] = []
+    seen: set[str] = set()  # a page's inline box + its reconstructed twin — keep the first
     for box in parse_stat_boxes(text):
+        key = f"{box.category}:{box.name.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
         name = repair_ligatures(_titlecase(box.name))
         group = _STAT_BOX_GROUP.get(box.kind, "Spells")
         rows = [["Level", str(box.level)]] + [[lbl, val] for lbl, val in box.fields]
