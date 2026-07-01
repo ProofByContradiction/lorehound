@@ -10,16 +10,23 @@ reading order line by line, and re-emit the ``##### **NAME KIND LEVEL**`` +
 ``**Field** value`` Markdown that :mod:`stat_boxes` already parses. The output is
 appended to the page's Markdown at extraction time.
 
-Self-gating: it fires only where the heading font signature exists (Paizo's
-``GoodOT-CondBold``), so other books/pages produce nothing.
+Self-gating: it fires only on pages that carry the box signature — a short
+all-caps name sharing its line with a ``KIND N`` token — so other books/pages
+produce nothing. The box-heading *font* is derived from that signature per page
+rather than hardcoded, so any publisher's display font works (not just Paizo's
+``GoodOT-CondBold``); the literal below is only the backward-compatible default.
 """
 
 from __future__ import annotations
 
 import re
+from collections import Counter
 
-# The box-name heading: a short all-caps run in Paizo's condensed display bold.
+# The default box-name heading font (Paizo's condensed display bold). Used only as
+# a fallback / for direct helper calls; page_spell_boxes derives the actual font(s)
+# from each page's own box signature via _detect_box_heads.
 _HEAD_FONT = "GoodOT-CondBold"
+_HEAD_SIZE_LO, _HEAD_SIZE_HI = 11.0, 13.0  # default display-heading size window
 _KIND_RE = re.compile(r"\b(SPELL|CANTRIP|FOCUS|RITUAL|FEAT)\s*(\d+)\b")
 # Chapter-tab words printed vertically in the outer page margin — never box content.
 _TAB_WORDS = frozenset({
@@ -30,11 +37,47 @@ _TAB_WORDS = frozenset({
 })
 
 
-def _is_heading_span(s) -> bool:
-    t = s["text"].strip().rstrip("\t").strip()
-    return (11 <= s["size"] <= 13 and _HEAD_FONT in s["font"]
-            and t.isupper() and len(t) >= 3
+def _looks_like_box_name(text: str) -> bool:
+    """A short, all-caps, alphabetic run — the shape of a box's NAME heading,
+    independent of font (e.g. ``MAGIC MISSILE``). Digits disqualify it so the
+    ``SPELL 1`` level label isn't mistaken for a name."""
+    t = text.strip().rstrip("\t").strip()
+    return (t.isupper() and len(t) >= 3
             and t.replace(" ", "").replace("-", "").replace("’", "").isalpha())
+
+
+def _is_heading_span(s, fonts=(_HEAD_FONT,), size_lo=_HEAD_SIZE_LO, size_hi=_HEAD_SIZE_HI) -> bool:
+    """Whether span ``s`` is a box-name heading. ``fonts``/``size_lo``/``size_hi``
+    default to Paizo's signature so direct callers keep working, but
+    :func:`page_spell_boxes` passes the font(s) and size band it *derived* from the
+    page itself (see :func:`_detect_box_heads`) so no publisher font is hardcoded."""
+    return (size_lo <= s["size"] <= size_hi and any(f in s["font"] for f in fonts)
+            and _looks_like_box_name(s["text"]))
+
+
+def _detect_box_heads(spans: list[dict]) -> tuple[set[str], float, float]:
+    """Derive the box-name heading font(s) and size band from the page's own box
+    signature: a short all-caps run sharing its visual line with a ``KIND N`` token
+    to its right (``MAGIC MISSILE`` … ``SPELL 1``). The fonts/sizes of the names that
+    match become the page's heading style — so any display font works, not just
+    ``GoodOT-CondBold``. Returns ``(set(), 0, 0)`` when the page carries no boxed
+    entries, which keeps the whole reconstruction self-gating."""
+    fonts: Counter = Counter()
+    sizes: list[float] = []
+    for s in spans:
+        if not _looks_like_box_name(s["text"]):
+            continue
+        sx, sy = s["origin"]
+        # A KIND+number token to the right on the same visual line marks this as a
+        # box name (not a section title). Names and their KIND label are separate spans.
+        if any(abs(o["origin"][1] - sy) < 6 and o["origin"][0] > sx
+               and _KIND_RE.search(o["text"].upper())
+               for o in spans if o is not s):
+            fonts[s["font"]] += 1
+            sizes.append(s["size"])
+    if not sizes:
+        return set(), 0.0, 0.0
+    return set(fonts), min(sizes) - 0.5, max(sizes) + 0.5
 
 
 def _is_bold(s) -> bool:
@@ -83,7 +126,16 @@ def page_spell_boxes(page) -> str:
     width = page.rect.width
     mid = width / 2
     spans = _spans(page)
-    heads = [s for s in spans if _is_heading_span(s)]
+    # Derive the box-heading font(s) + size band from this page's own signature, so
+    # the detector doesn't depend on knowing a publisher's display-font name.
+    fonts, size_lo, size_hi = _detect_box_heads(spans)
+    if not fonts:
+        return ""
+
+    def is_head(s) -> bool:
+        return _is_heading_span(s, fonts, size_lo, size_hi)
+
+    heads = [s for s in spans if is_head(s)]
     if not heads:
         return ""
 
@@ -113,7 +165,7 @@ def page_spell_boxes(page) -> str:
         xlo, xhi = (36, mid - 6) if c == 0 else (mid + 2, width - 40)
         region = [s for s in spans
                   if xlo <= s["origin"][0] < xhi and hy + 4 <= s["origin"][1] < ymax - 2
-                  and not _is_heading_span(s)
+                  and not is_head(s)
                   and s["text"].strip() not in _TAB_WORDS]
         body = "\n".join(_box_lines(region))
         boxes.append(f"##### **{name} {level}**\n{body}\n")
