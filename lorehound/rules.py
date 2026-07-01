@@ -660,7 +660,9 @@ def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
             continue
         seen.add(key)
         name = repair_ligatures(_titlecase(box.name))
-        group = _STAT_BOX_GROUP.get(box.kind, "Spells")
+        # Known kinds get a curated group label; a derived kind (item/hazard/…) labels
+        # its own section rather than being filed under "Spells".
+        group = _STAT_BOX_GROUP.get(box.kind, box.kind.title())
         rows = [["Level", str(box.level)]] + [[lbl, val] for lbl, val in box.fields]
         flat = " ".join(val for _, val in box.fields)
         chunks.append(Chunk(

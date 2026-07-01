@@ -12,20 +12,35 @@ Pathfinder 2e renders each as markdown like::
 
 so they parse straight from the extracted markdown — no PDF geometry needed. The
 detector is keyed on that ``##### **NAME KIND LEVEL**`` heading plus ``**Field**``
-labels, which is self-gating: a book without the pattern yields nothing. (The
-KIND set is the only system-specific knob; lift it to a source profile later.)
+labels, which is self-gating: a book without the pattern yields nothing. The KIND set
+is no longer hardcoded — categories beyond the known spell-family/feats are derived
+from the document when they recur (see :func:`_accepted_kinds`).
 """
 
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .text_utils import repair_ligatures
 
-# Box kinds we recognise in the heading (Pathfinder). The heading is
-# ``NAME <KIND> <LEVEL>`` — e.g. "FIREBALL SPELL 3", "POWER ATTACK FEAT 1".
+# Box kinds we always recognise in the heading (Pathfinder's spell-family + feats).
+# The heading is ``NAME <KIND> <LEVEL>`` — e.g. "FIREBALL SPELL 3", "POWER ATTACK FEAT 1".
 KINDS = ("SPELL", "CANTRIP", "FOCUS", "RITUAL", "FEAT")
+_SPELL_KINDS = frozenset({"SPELL", "CANTRIP", "FOCUS", "RITUAL"})
+
+# Generic box heading: a ``NAME <CAPWORD> <LEVEL>`` where the category is any ≥3-letter
+# all-caps word. This lets us pick up box categories beyond the hardcoded set (e.g.
+# Pathfinder's ITEM / HAZARD / RUNE / SNARE boxes, currently dropped) without naming
+# them — but a *novel* category must recur across the book (``_MIN_KIND_RECURRENCE``)
+# so a stray prose heading never becomes a spurious entry. Known kinds always qualify,
+# so existing spell/feat cards are unchanged.
+_HEAD_ANY = re.compile(
+    r"^#{3,6}\s*\*\*(?P<name>.+?)\s+(?P<kind>[A-Z][A-Z’'\-]{2,})\s+(?P<level>\d+)\*\*\s*$",
+    re.M,
+)
+_MIN_KIND_RECURRENCE = 3
 
 _HEAD = re.compile(
     r"^#{3,6}\s*\*\*(?P<name>.+?)\s+(?P<kind>" + "|".join(KINDS) + r")\s+(?P<level>\d+)\*\*\s*$",
@@ -59,8 +74,15 @@ class StatBox:
 
     @property
     def category(self) -> str:
-        """Routing category — feats vs everything-spell-like."""
-        return "feat" if self.kind == "FEAT" else "spell"
+        """Routing category: feats, the spell family, or a box category of its own
+        (item / hazard / rune / snare / …) so a non-spell box isn't mislabelled as a
+        spell. Only ``spell`` and ``feat`` become dedicated cards; the rest are
+        searchable chunks."""
+        if self.kind == "FEAT":
+            return "feat"
+        if self.kind in _SPELL_KINDS:
+            return "spell"
+        return self.kind.lower()
 
 
 def _clean(s: str) -> str:
@@ -75,9 +97,24 @@ def _page_at(text: str, pos: int) -> int | None:
     return last
 
 
+def _accepted_kinds(heads: list[re.Match]) -> set[str]:
+    """The box categories to keep: the known kinds (always) plus any novel capword
+    category that recurs at least ``_MIN_KIND_RECURRENCE`` times across the document —
+    the recurrence gate keeps a one-off ``##### **X FOO 1**`` in prose from becoming a
+    bogus entry while admitting a real, repeated category the book uses."""
+    counts = Counter(m.group("kind") for m in heads)
+    accepted = {k for k in counts if k in KINDS}
+    accepted |= {k for k, n in counts.items() if n >= _MIN_KIND_RECURRENCE}
+    return accepted
+
+
 def parse_stat_boxes(text: str) -> list[StatBox]:
-    """Parse every ``##### **NAME KIND LEVEL**`` box out of extracted markdown."""
-    heads = list(_HEAD.finditer(text))
+    """Parse every ``##### **NAME KIND LEVEL**`` box out of extracted markdown. The box
+    category is derived from the headings (see :func:`_accepted_kinds`) rather than a
+    fixed list, so categories the book uses beyond spells/feats are recovered too."""
+    all_heads = list(_HEAD_ANY.finditer(text))
+    accepted = _accepted_kinds(all_heads)
+    heads = [m for m in all_heads if m.group("kind") in accepted]
     boxes: list[StatBox] = []
     for i, m in enumerate(heads):
         end = heads[i + 1].start() if i + 1 < len(heads) else m.end() + 1200

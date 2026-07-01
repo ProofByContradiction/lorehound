@@ -103,3 +103,31 @@ class TestParseStatBoxes(unittest.TestCase):
         box = parse_stat_boxes(md)[0]
         prereqs = [v for k, v in box.fields if k == "Prerequisites"]
         self.assertEqual(prereqs, ["master in Perception"])
+
+
+class TestGeneralizedKinds(unittest.TestCase):
+    """#62 (increment C): box categories beyond the hardcoded spell/feat set are
+    recovered when they recur (e.g. Pathfinder's HAZARD/ITEM boxes), routed to their
+    own category so they aren't mislabelled as spells, and one-offs are ignored."""
+
+    def test_recurring_novel_kind_recovered_with_own_category(self):
+        md = ("##### **HIDDEN PIT HAZARD 3**\n**Complexity** simple\nA pit opens.\n\n"
+              "##### **SPIKED PIT HAZARD 4**\n**Complexity** simple\nSpikes line it.\n\n"
+              "##### **DROWNING PIT HAZARD 5**\n**Stealth** trained\nIt floods.\n")
+        boxes = parse_stat_boxes(md)
+        self.assertEqual(len(boxes), 3)
+        self.assertTrue(all(b.kind == "HAZARD" for b in boxes))
+        self.assertTrue(all(b.category == "hazard" for b in boxes))  # not "spell"
+
+    def test_one_off_novel_kind_is_ignored(self):
+        md = ("##### **FIREBALL SPELL 3**\n**Range** 500 feet\nA blast of fire.\n\n"
+              "##### **ODD THING WIDGET 2**\n**Foo** bar\nA one-off heading.\n")
+        names = {b.name for b in parse_stat_boxes(md)}
+        self.assertIn("FIREBALL", names)        # known kind kept
+        self.assertNotIn("ODD THING", names)    # single WIDGET → dropped
+
+    def test_known_kinds_still_parse_at_any_count(self):
+        # A lone SPELL box (count 1) is still recovered — known kinds never need to recur.
+        boxes = parse_stat_boxes("##### **BLESS SPELL 1**\n**Range** 30 feet\nBless allies.\n")
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(boxes[0].category, "spell")

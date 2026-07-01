@@ -10,8 +10,10 @@ from lorehound.stat_box_extract import (
     _box_lines,
     _derive_chrome,
     _detect_box_heads,
+    _detect_kinds,
     _is_bold,
     _is_heading_span,
+    _kind_regex,
 )
 
 
@@ -68,6 +70,40 @@ class TestDeriveBoxHeadStyle(unittest.TestCase):
         ]
         fonts, _, _ = _detect_box_heads(spans)
         self.assertEqual(fonts, set())
+
+
+class TestDeriveKinds(unittest.TestCase):
+    """#62 (increment C): the box category vocabulary (SPELL/FEAT/…) is derived from
+    the page, not hardcoded — known Paizo kinds always count, novel ones must recur."""
+
+    def _entry(self, name, kind_label, y, font="Disp-Bold"):
+        # A box name + its "<KIND> <n>" label, as two spans on the same line.
+        return [span(name, 68, y, size=12.0, font=font),
+                span(kind_label, 220, y, size=12.0, font=font)]
+
+    def test_known_kind_accepted_at_any_count(self):
+        self.assertIn("SPELL", _detect_kinds(self._entry("HEAL", "SPELL 1", 200)))
+
+    def test_novel_kind_requires_recurrence(self):
+        one = self._entry("BLAST", "POWER 3", 200)
+        self.assertNotIn("POWER", _detect_kinds(one))          # single → rejected
+        three = (self._entry("BLAST", "POWER 3", 200)
+                 + self._entry("SURGE", "POWER 1", 260)
+                 + self._entry("NOVA", "POWER 5", 320))
+        self.assertIn("POWER", _detect_kinds(three))           # recurs → accepted
+
+    def test_two_letter_stat_is_never_a_kind(self):
+        # "HP 20" / "AC 5" must not read as a category, even repeated.
+        spans = (self._entry("GOBLIN", "HP 20", 200)
+                 + self._entry("ORC", "HP 30", 260)
+                 + self._entry("TROLL", "HP 40", 320))
+        self.assertEqual(_detect_kinds(spans), set())
+
+    def test_kind_regex_matches_derived_categories(self):
+        rx = _kind_regex({"SPELL", "POWER"})
+        self.assertTrue(rx.search("POWER 3"))
+        self.assertTrue(rx.search("SPELL 1"))
+        self.assertFalse(rx.search("FEAT 2"))                  # not in the derived set
 
 
 class TestDeriveChrome(unittest.TestCase):
