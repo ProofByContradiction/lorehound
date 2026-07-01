@@ -1,5 +1,0 @@
-===== RE-EXTRACT (spell-box layout recovery, MD v2) Tue Jun 30 22:09:29 EDT 2026 =====
-[index] starting incremental (changed only)…
-Consider using the pymupdf_layout package for a greatly improved page layout analysis.
-[index] extracted 18 doc(s) in 1811s; manifest → cache/.reindex-manifest.json
-[index] the running bot will hot-reload its index shortly.
