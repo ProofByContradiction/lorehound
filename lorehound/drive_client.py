@@ -248,7 +248,7 @@ class DriveClient:
         import pymupdf4llm
 
         from .headings import StyleHeadings, demote_noise_doc, inject_toc_headings
-        from .stat_box_extract import page_spell_boxes
+        from .stat_box_extract import page_spell_boxes, toc_titles
 
         # 0.3.4 is ML-free already; guard for 1.27.x where use_layout() exists.
         if hasattr(pymupdf4llm, "use_layout"):
@@ -265,12 +265,14 @@ class DriveClient:
             texts = demote_noise_doc(texts)          # drop page-numbers / repeated labels
             texts = inject_toc_headings(doc, texts)  # add publisher ToC chapter headings
             # Recover boxed spell/feat entries pymupdf4llm scrambles on dense
-            # multi-column pages (self-gating on the Paizo heading font), appending
-            # them so stat_boxes can parse them. A clean inline box already in the
-            # text wins on dedup; this fills the ones that were lost.
+            # multi-column pages (self-gating on the box signature), appending them so
+            # stat_boxes can parse them. A clean inline box already in the text wins on
+            # dedup; this fills the ones that were lost. The book's ToC titles let the
+            # recoverer derive its page chrome instead of hardcoding one publisher's.
+            titles = toc_titles(doc)
             for i, page in enumerate(doc):
                 if i < len(texts):
-                    boxes = page_spell_boxes(page)
+                    boxes = page_spell_boxes(page, titles)
                     if boxes:
                         texts[i] = f"{texts[i]}\n\n{boxes}"
         finally:

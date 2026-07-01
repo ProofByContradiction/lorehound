@@ -6,7 +6,9 @@ span-level helpers with synthetic span dicts."""
 import unittest
 
 from lorehound.stat_box_extract import (
+    _TAB_WORDS,
     _box_lines,
+    _derive_chrome,
     _detect_box_heads,
     _is_bold,
     _is_heading_span,
@@ -66,6 +68,49 @@ class TestDeriveBoxHeadStyle(unittest.TestCase):
         ]
         fonts, _, _ = _detect_box_heads(spans)
         self.assertEqual(fonts, set())
+
+
+class TestDeriveChrome(unittest.TestCase):
+    """#62 (increment B): page chrome (the vertical tab margin + running headers) is
+    derived from the document's own ToC titles, not hardcoded to Paizo's Gin/_TAB_WORDS."""
+
+    def _body(self):
+        # Enough body text that "Times" is unambiguously the page's body font.
+        return [
+            span("You cast a spell that scorches your foes with roaring flame.",
+                 68, 200, size=8.0, font="Times"),
+            span("The blast fills the area and everyone must attempt a save.",
+                 68, 212, size=8.0, font="Times"),
+        ]
+
+    def test_running_header_font_derived_as_chrome(self):
+        raw = self._body() + [span("SPELLS", 300, 40, size=8.0, font="Gill-Chrome")]
+        chrome_fonts, tab_words = _derive_chrome(raw, frozenset({"Spells"}))
+        self.assertIn("Gill-Chrome", chrome_fonts)   # font of the running header
+        self.assertIn("Gin", chrome_fonts)           # Paizo default retained
+        self.assertIn("Spells", tab_words)           # ToC word folded into tab words
+
+    def test_no_toc_falls_back_to_paizo_defaults(self):
+        chrome_fonts, tab_words = _derive_chrome(self._body(), frozenset())
+        self.assertEqual(chrome_fonts, {"Gin"})
+        self.assertEqual(tab_words, set(_TAB_WORDS))
+
+    def test_body_font_never_flagged_even_if_it_matches_a_title(self):
+        # A body span whose text happens to equal a chapter title must NOT drop the
+        # body font — that would delete real content.
+        raw = self._body() + [span("Equipment", 68, 224, size=8.0, font="Times")]
+        chrome_fonts, _ = _derive_chrome(raw, frozenset({"Equipment"}))
+        self.assertEqual(chrome_fonts, {"Gin"})       # Times (body) not added
+
+    def test_heading_font_never_flagged_even_if_it_matches_a_title(self):
+        # A box-name heading whose text matches a ToC entry must not drop the heading
+        # font (which would erase every box name in that font).
+        raw = self._body() + [
+            span("MAGIC MISSILE", 68, 240, size=12.0, font="Disp-Bold"),
+            span("SPELL 1", 200, 240, size=12.0, font="Disp-Bold"),  # KIND sibling
+        ]
+        chrome_fonts, _ = _derive_chrome(raw, frozenset({"Magic Missile"}))
+        self.assertEqual(chrome_fonts, {"Gin"})       # Disp-Bold (heading) not added
 
 
 class TestBoxLines(unittest.TestCase):
