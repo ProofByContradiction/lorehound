@@ -1,0 +1,34 @@
+# Lorehound Discord bot — systemd unit (reference copy).
+#
+# deploy/setup.sh generates the *installed* copy with your real user and clone
+# path substituted in, so you normally don't edit this by hand. It's kept in the
+# repo as documentation of the expected shape.
+#
+# The bot reads all its secrets from the repo's .env via python-dotenv, so this
+# unit deliberately has NO EnvironmentFile — that sidesteps systemd's quirky
+# quoting of values like GOOGLE_CREDENTIALS_JSON. Keep secrets in .env only.
+
+[Unit]
+Description=Lorehound Discord bot
+Documentation=https://github.com/ProofByContradiction/lorehound
+After=network-online.target
+Wants=network-online.target
+# Don't thrash on a config crash-loop: >5 restarts in 5 min stops the unit.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__WORKDIR__/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=10
+# Light hardening — the bot only needs its own repo dir and outbound network.
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lorehound
+
+[Install]
+WantedBy=multi-user.target
