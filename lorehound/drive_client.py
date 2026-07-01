@@ -68,7 +68,7 @@ GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
 # Markdown extraction lineage. Bump when the to_markdown path itself changes so
 # stale Markdown is recomputed even though the source file is unchanged.
-MD_VERSION = "pymupdf-md-styleheadings-v2-spellboxes"
+MD_VERSION = "pymupdf-md-styleheadings-v3-spellboxes-nochrome"
 # Table extraction lineage (pdf_tables). Independent of MD_VERSION so a
 # markdown-only change reuses the (unchanged) tables instead of re-detecting them.
 TABLE_VERSION = "find-tables-lines-v18-split-stacked-catalogs"

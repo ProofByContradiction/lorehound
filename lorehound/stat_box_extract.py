@@ -42,10 +42,14 @@ def _is_bold(s) -> bool:
 
 
 def _spans(page) -> list[dict]:
+    # Drop the ``Gin`` display font: Paizo uses it only for page chrome — the
+    # vertical chapter-tab margin ("The Age of Lost Omens", "Crafting & Treasure")
+    # and running headers ("SPELLS" / "LEVEL") — which otherwise interleave into a
+    # box's text. Headings, the level label, and body are GoodOT / Times, untouched.
     out = []
     for b in page.get_text("dict")["blocks"]:
         for line in b.get("lines", []):
-            out.extend(s for s in line["spans"] if s["text"].strip())
+            out.extend(s for s in line["spans"] if s["text"].strip() and "Gin" not in s["font"])
     return out
 
 
