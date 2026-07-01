@@ -27,7 +27,15 @@ from collections import Counter
 # from each page's own box signature via _detect_box_heads.
 _HEAD_FONT = "GoodOT-CondBold"
 _HEAD_SIZE_LO, _HEAD_SIZE_HI = 11.0, 13.0  # default display-heading size window
+# Known Paizo box categories — always accepted so existing books are unchanged.
+_KNOWN_KINDS = frozenset({"SPELL", "CANTRIP", "FOCUS", "RITUAL", "FEAT"})
 _KIND_RE = re.compile(r"\b(SPELL|CANTRIP|FOCUS|RITUAL|FEAT)\s*(\d+)\b")
+# The generic shape of a box's category+rank label: a ≥3-letter all-caps word then a
+# number ("SPELL 1", "POWER 3"). ≥3 letters skips common 2-letter stats (HP/AC/DC),
+# and a *novel* category must also recur (see _detect_kinds) so a stray "STR 10" or
+# "AREA 20" never turns a prose page into boxes.
+_KIND_TOKEN_RE = re.compile(r"\b([A-Z][A-Z’'\-]{2,})\s+(\d+)\b")
+_MIN_NOVEL_KIND_RECURRENCE = 3
 # Default page-chrome font fragment (Paizo prints the vertical chapter-tab margin and
 # running headers in "Gin"). page_spell_boxes ALSO derives chrome fonts from the
 # document's own ToC (see _derive_chrome), so this is just the backward-compatible seed.
@@ -60,24 +68,66 @@ def _is_heading_span(s, fonts=(_HEAD_FONT,), size_lo=_HEAD_SIZE_LO, size_hi=_HEA
             and _looks_like_box_name(s["text"]))
 
 
-def _detect_box_heads(spans: list[dict]) -> tuple[set[str], float, float]:
+def _kind_to_right(span: dict, spans: list[dict], kind_re: re.Pattern) -> re.Match | None:
+    """The ``KIND N`` token on ``span``'s visual line, to its right, if any — the
+    marker that a short all-caps run is a box name rather than a section title.
+    (The name and its KIND label are separate spans.)"""
+    sx, sy = span["origin"]
+    for o in spans:
+        if o is span:
+            continue
+        if abs(o["origin"][1] - sy) < 6 and o["origin"][0] > sx:
+            m = kind_re.search(o["text"].upper())
+            if m:
+                return m
+    return None
+
+
+def _detect_kinds(spans: list[dict]) -> set[str]:
+    """The box-category words that anchor boxes on this page, derived from the layout
+    rather than hardcoded to Paizo's. For every short all-caps name candidate, look
+    right on its line for a generic ``<CAPWORD> <number>`` token and tally the capword.
+    Known Paizo kinds count as soon as they appear (so existing books are unchanged);
+    a *novel* category must recur (``_MIN_NOVEL_KIND_RECURRENCE``) so a one-off like a
+    single ``STR 10`` never promotes a prose page into boxes. ``set()`` → no boxes here."""
+    counts: Counter = Counter()
+    for s in spans:
+        if not _looks_like_box_name(s["text"]):
+            continue
+        m = _kind_to_right(s, spans, _KIND_TOKEN_RE)
+        if m:
+            counts[m.group(1)] += 1
+    kinds = {k for k in counts if k in _KNOWN_KINDS}
+    kinds |= {k for k, n in counts.items() if n >= _MIN_NOVEL_KIND_RECURRENCE}
+    return kinds
+
+
+def _kind_regex(kinds: set[str]) -> re.Pattern:
+    """A ``\\b(K1|K2|…)\\s*(\\d+)\\b`` matcher for this page's derived box categories,
+    used to pull each box's rank label and to strip stray KIND tokens from body text."""
+    alt = "|".join(re.escape(k) for k in sorted(kinds, key=len, reverse=True))
+    return re.compile(rf"\b({alt})\s*(\d+)\b")
+
+
+def _detect_box_heads(
+    spans: list[dict], kind_re: re.Pattern | None = None
+) -> tuple[set[str], float, float]:
     """Derive the box-name heading font(s) and size band from the page's own box
     signature: a short all-caps run sharing its visual line with a ``KIND N`` token
     to its right (``MAGIC MISSILE`` … ``SPELL 1``). The fonts/sizes of the names that
     match become the page's heading style — so any display font works, not just
-    ``GoodOT-CondBold``. Returns ``(set(), 0, 0)`` when the page carries no boxed
-    entries, which keeps the whole reconstruction self-gating."""
+    ``GoodOT-CondBold``. ``kind_re`` defaults to the categories derived for this page
+    (:func:`_detect_kinds`); callers that already derived it pass it in. Returns
+    ``(set(), 0, 0)`` when the page carries no boxed entries, keeping it self-gating."""
+    if kind_re is None:
+        kinds = _detect_kinds(spans)
+        if not kinds:
+            return set(), 0.0, 0.0
+        kind_re = _kind_regex(kinds)
     fonts: Counter = Counter()
     sizes: list[float] = []
     for s in spans:
-        if not _looks_like_box_name(s["text"]):
-            continue
-        sx, sy = s["origin"]
-        # A KIND+number token to the right on the same visual line marks this as a
-        # box name (not a section title). Names and their KIND label are separate spans.
-        if any(abs(o["origin"][1] - sy) < 6 and o["origin"][0] > sx
-               and _KIND_RE.search(o["text"].upper())
-               for o in spans if o is not s):
+        if _looks_like_box_name(s["text"]) and _kind_to_right(s, spans, kind_re):
             fonts[s["font"]] += 1
             sizes.append(s["size"])
     if not sizes:
@@ -147,9 +197,10 @@ def _raw_spans(page) -> list[dict]:
     return out
 
 
-def _box_lines(spans: list[dict]) -> list[str]:
+def _box_lines(spans: list[dict], kind_re: re.Pattern = _KIND_RE) -> list[str]:
     """Render region spans as Markdown lines (one per visual line), wrapping short
-    bold spans as ``**label**`` so field labels survive."""
+    bold spans as ``**label**`` so field labels survive. ``kind_re`` (this page's
+    derived box categories) strips a stray rank label like ``SPELL 1`` from the body."""
     spans = sorted(spans, key=lambda s: (round(s["origin"][1] / 2.5), s["origin"][0]))
     lines: list[list[dict]] = []
     for s in spans:
@@ -163,7 +214,7 @@ def _box_lines(spans: list[dict]) -> list[str]:
         parts = []
         for s in ln:
             t = s["text"].strip()
-            if not t or _KIND_RE.fullmatch(t.upper()):
+            if not t or kind_re.fullmatch(t.upper()):
                 continue
             parts.append(f"**{t}**" if _is_bold(s) and len(t) <= 18 else t)
         text = re.sub(r"[ \t]+", " ", " ".join(parts)).strip()
@@ -185,9 +236,14 @@ def page_spell_boxes(page, titles: frozenset[str] = frozenset()) -> str:
     # so the vertical tab margin and running headers don't bleed into a box's text.
     chrome_fonts, tab_words = _derive_chrome(raw, titles)
     spans = [s for s in raw if not _is_chrome(s, chrome_fonts)]
-    # Derive the box-heading font(s) + size band from this page's own signature, so
-    # the detector doesn't depend on knowing a publisher's display-font name.
-    fonts, size_lo, size_hi = _detect_box_heads(spans)
+    # Derive this page's box categories (SPELL/FEAT, or a system we've never seen) and
+    # the box-heading font(s) + size band from the page's own signature — so the
+    # detector depends on neither a publisher's display font nor its category vocabulary.
+    kinds = _detect_kinds(spans)
+    if not kinds:
+        return ""
+    kind_re = _kind_regex(kinds)
+    fonts, size_lo, size_hi = _detect_box_heads(spans, kind_re)
     if not fonts:
         return ""
 
@@ -210,7 +266,7 @@ def page_spell_boxes(page, titles: frozenset[str] = frozenset()) -> str:
         level = ""
         for s in spans:
             if abs(s["origin"][1] - hy) < 6 and s["origin"][0] > hx:
-                m = _KIND_RE.search(s["text"].upper())
+                m = kind_re.search(s["text"].upper())
                 if m:
                     level = f"{m.group(1)} {m.group(2)}"
                     break
@@ -226,6 +282,6 @@ def page_spell_boxes(page, titles: frozenset[str] = frozenset()) -> str:
                   if xlo <= s["origin"][0] < xhi and hy + 4 <= s["origin"][1] < ymax - 2
                   and not is_head(s)
                   and s["text"].strip() not in tab_words]
-        body = "\n".join(_box_lines(region))
+        body = "\n".join(_box_lines(region, kind_re))
         boxes.append(f"##### **{name} {level}**\n{body}\n")
     return "\n".join(boxes)
