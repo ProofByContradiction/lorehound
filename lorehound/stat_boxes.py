@@ -42,8 +42,10 @@ _NOISE_LINE = re.compile(
     r"|^[\s*]*(?:[a-z]{1,2}|\d{1,4})(?:[\s*]+(?:[a-z]{1,2}|\d{1,4}))*[\s*]*$)",
     re.I,
 )
-# A plausible field label: capitalised, a few words, no digits-only / watermark.
-_FIELD_LABEL = re.compile(r"^[A-Z][A-Za-z][A-Za-z '()+/-]{0,24}$")
+# A plausible field label: capitalised, a few words. Must START with two letters
+# (so watermark tokens like "18"/"2023" are rejected), but digits are allowed after
+# that so "Heightened (+1)" / "Heightened (3rd)" count as fields, not lost text.
+_FIELD_LABEL = re.compile(r"^[A-Z][A-Za-z][A-Za-z0-9 '()+/-]{0,24}$")
 
 
 @dataclass

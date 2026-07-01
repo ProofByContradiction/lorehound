@@ -70,6 +70,17 @@ class TestParseStatBoxes(unittest.TestCase):
     def test_returns_statbox_instances(self):
         self.assertIsInstance(self.boxes["FIREBALL"], StatBox)
 
+    def test_heightened_is_captured_as_a_field(self):
+        # "Heightened (+1)" / "Heightened (3rd)" contain digits but are real fields —
+        # they must not be dropped (nor leak into the description).
+        md = ("##### **FIREBALL SPELL 3**\n"
+              "**Saving Throw** basic Reflex\n"
+              "A blast of fire deals 6d6 fire damage.\n"
+              "**Heightened (+1)** The damage increases by 2d6.\n")
+        box = parse_stat_boxes(md)[0]
+        self.assertIn(("Heightened (+1)", "The damage increases by 2d6."), box.fields)
+        self.assertNotIn("Heightened", box.description)
+
     def test_wrapped_field_value_absorbs_continuation(self):
         # a field value that wraps to the next visual line keeps its tail instead of
         # leaking the first word into the description
