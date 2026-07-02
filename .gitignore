@@ -25,8 +25,10 @@ data/
 .idea/
 .vscode/
 
-# Local agent state / worktrees (Claude Code) — never publish these
-.claude/
+# Local agent state / worktrees (Claude Code) — never publish these …
+.claude/*
+# … except committed project skills (playbooks the team + agents share).
+!.claude/skills/
 
 # Experimental art variants — keep the chosen icon/banner, skip the bulk
 assets/alternates/
