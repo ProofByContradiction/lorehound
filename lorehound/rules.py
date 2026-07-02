@@ -823,12 +823,20 @@ class RulesService:
         game: str | None = None,
         book: str | None = None,
         category: str | None = None,
+        categories: tuple[str, ...] | None = None,
         top_k: int = 5,
         min_rel: float | None = None,
     ) -> list[SearchHit]:
         return self.index.search(
-            query, top_k=top_k, game=game, book=book, category=category, min_rel=min_rel
+            query, top_k=top_k, game=game, book=book, category=category,
+            categories=categories, min_rel=min_rel,
         )
+
+    def categories(self, game: str) -> set[str]:
+        """The fine content categories present for a game (spell/feat/items/hazard/…).
+        Lets the command layer map an unknown box category to the default domain
+        without hardcoding it."""
+        return {c.category for c in self.index.chunks if c.game == game}
 
     # --- Careers (/class) ---------------------------------------------------
 

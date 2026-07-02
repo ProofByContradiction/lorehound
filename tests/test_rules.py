@@ -800,5 +800,44 @@ class TestIndexingStatus(unittest.TestCase):
         self.assertTrue(svc.ready)
 
 
+class TestDomainModel(unittest.TestCase):
+    """The command layer maps fine content categories to a closed set of domains, so
+    new box types need no new command — they fall to the default domain (/rule)."""
+
+    class _FakeRules:
+        def __init__(self, present):
+            self._present = set(present)
+
+        def categories(self, game):
+            return set(self._present)
+
+    def _domain(self, present, domain):
+        import lorehound.cogs.rules_cog as cog
+        return cog._domain_categories(self._FakeRules(present), "G", domain)
+
+    def test_known_types_map_to_domains(self):
+        present = {"spell", "feat", "rules", "hazard", "snare", "items", "item",
+                   "rune", "transport", "reference"}
+        self.assertEqual(self._domain(present, "ability"), ("feat", "spell"))
+        self.assertEqual(self._domain(present, "rule"), ("hazard", "rules", "snare"))
+        self.assertEqual(self._domain(present, "item"), ("item", "items", "rune"))
+        self.assertEqual(self._domain(present, "transport"), ("transport",))
+
+    def test_unknown_type_falls_to_default_domain_only(self):
+        present = {"spell", "power"}  # "power" is unmapped
+        self.assertIn("power", self._domain(present, "rule"))     # absorbed by default
+        self.assertNotIn("power", self._domain(present, "ability"))
+        self.assertNotIn("power", self._domain(present, "item"))
+
+    def test_reference_and_own_command_types_not_absorbed(self):
+        # reference is /lookup-only; tables/card have their own commands → never /rule.
+        present = {"reference", "tables", "card", "rules"}
+        rule_cats = self._domain(present, "rule")
+        self.assertNotIn("reference", rule_cats)
+        self.assertNotIn("tables", rule_cats)
+        self.assertNotIn("card", rule_cats)
+        self.assertEqual(rule_cats, ("rules",))
+
+
 if __name__ == "__main__":
     unittest.main()

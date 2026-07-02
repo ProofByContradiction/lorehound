@@ -153,6 +153,7 @@ class SearchIndex:
         game: str | None = None,
         book: str | None = None,
         category: str | None = None,
+        categories: tuple[str, ...] | None = None,
         min_rel: float | None = None,
     ) -> list[SearchHit]:
         if self.is_empty:
@@ -169,6 +170,9 @@ class SearchIndex:
             candidates = [c for c in candidates if c.source == book]
         if category:
             candidates = [c for c in candidates if c.category == category]
+        if categories:  # a domain covers several fine categories
+            allowed = set(categories)
+            candidates = [c for c in candidates if c.category in allowed]
         if not candidates:
             return []
 
