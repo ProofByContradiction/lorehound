@@ -27,6 +27,7 @@ EXTENSIONS = [
     "lorehound.cogs.dice_cog",
     "lorehound.cogs.rules_cog",
     "lorehound.cogs.chargen_cog",
+    "lorehound.cogs.builder_cog",
     "lorehound.cogs.meta_cog",
 ]
 
