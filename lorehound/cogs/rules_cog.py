@@ -204,7 +204,16 @@ async def _catalog_autocomplete(
 
 
 async def _item_name_autocomplete(interaction, current):  # noqa: ANN001
-    return await _catalog_autocomplete(interaction, current, "items")
+    # /item spans the weapon/gear catalog ("items") plus boxed consumables ("item").
+    both = await _catalog_autocomplete(interaction, current, "items")
+    both += await _catalog_autocomplete(interaction, current, "item")
+    seen: set[str] = set()
+    out = []
+    for c in both:
+        if c.value.lower() not in seen:
+            seen.add(c.value.lower())
+            out.append(c)
+    return out[:25]
 
 
 async def _transport_name_autocomplete(interaction, current):  # noqa: ANN001
@@ -642,6 +651,12 @@ class RulesCog(commands.Cog):
                 direct = self.rules.catalog_card_lookup(
                     game, category, query, book=chosen_book
                 )
+                if category == "items":
+                    # Also surface boxed consumables recovered as the "item" category
+                    # (Pathfinder poisons/alchemical), so /item finds them alongside
+                    # the weapon/gear catalog.
+                    direct = _merge_item_hits(direct, self.rules.catalog_card_lookup(
+                        game, "item", query, book=chosen_book))
                 hits = _merge_item_hits(direct, _explode_to_items(hits, query))[:25]
                 if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
                     selected = 0
