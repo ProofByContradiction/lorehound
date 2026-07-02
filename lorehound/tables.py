@@ -61,6 +61,38 @@ def is_ship_statblock(rows: list[list[str]]) -> bool:
     return hits >= max(3, len(col0) // 2)
 
 
+# Ground/air/water vehicle stat block — a different first-column vocabulary from a
+# spacecraft's (Agility, Speed/Range (cruise), Passengers, Shipping…). A vehicle
+# carries only one or two *ship* words (Armour, Weapons), so is_ship_statblock misses
+# it; recognise it by its own labels. Mirrors _SHIP_PARTS — structural, so it catches
+# a shattered fragment too — and stays Traveller-shaped (could be derived later).
+_VEHICLE_PARTS = frozenset({
+    "agility", "speed (cruise)", "speed (max)", "tactical speed", "vehicle speed",
+    "range (cruise)", "passengers", "shipping", "crew", "cargo", "hull", "cost",
+    "tl", "skill", "locomotion", "secondary locomotion", "armour", "armor", "weapons",
+    "traits", "cargo hull", "crew passengers", "shipping cost",
+})
+# Labels near-unique to a vehicle block (never a robot chassis or a rules table, which
+# is where a stray "Armour"/"Weapons" row would otherwise cause a false positive).
+_VEHICLE_MARKERS = frozenset({
+    "agility", "speed (cruise)", "speed (max)", "tactical speed", "vehicle speed",
+    "range (cruise)", "passengers", "shipping",
+})
+
+
+def is_vehicle_statblock(rows: list[list[str]]) -> bool:
+    """True if ``rows`` is a ground/air vehicle stat block (first column is vehicle
+    stats — TL, Skill, Agility, Speed/Range (cruise), Passengers…). Requires ≥2 of the
+    distinctive vehicle markers so a robot chassis or a rules table carrying a lone
+    ``Armour``/``Weapons`` row isn't mistaken for one."""
+    col0 = [(r[0] or "").strip().lower() for r in rows if r and (r[0] or "").strip()]
+    if len(col0) < 4:
+        return False
+    parts = sum(1 for c in col0 if c in _VEHICLE_PARTS)
+    markers = sum(1 for c in col0 if c in _VEHICLE_MARKERS)
+    return markers >= 2 and parts >= max(4, len(col0) // 2)
+
+
 def _wrapped_statblock_pairs(grid: list[list[str]]) -> list[tuple[str, str]] | None:
     """If ``grid`` is a *wrapped* single-item stat block — the item's stats laid out
     as alternating label/value rows (T2K weapon cards: row 0 ``TYPE AMMO REL …`` over

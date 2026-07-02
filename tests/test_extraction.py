@@ -25,7 +25,9 @@ from lorehound.pdf_tables import (
     _split_stacked_tables,
     _title,
     _unroll_repeated_columns,
+    classify_table,
 )
+from lorehound.tables import is_vehicle_statblock
 from scripts.extraction_eval import _find_table, score_entry, summarize
 
 
@@ -111,6 +113,44 @@ class TestSplitStackedCatalogs(unittest.TestCase):
         rows = [["Weapon", "Price", "Damage", "Bulk"]] + \
             [[w, "1 gp", "1d8", "1"] for w in ("Sword", "Axe", "Mace", "Spear", "Bow")]
         self.assertEqual(_split_stacked_catalogs(rows), [rows])
+
+
+class TestVehicleStatblock(unittest.TestCase):
+    """#62: is_vehicle_statblock recognises a ground/air vehicle stat block by its
+    first-column vocabulary (TL/Agility/Speed(cruise)/…) — a layout is_ship_statblock
+    misses (only 1–2 ship words) — and routes it to /transport, structurally, not by
+    chapter. The >=2-marker rule keeps robot chassis / rules tables out."""
+
+    VEHICLE = [
+        ["TL", "12"], ["Skill", "Drive (wheeled)"], ["Agility", "+1"],
+        ["Speed (Cruise)", "120 kph"], ["Range (Cruise)", "600 km"], ["Crew", "1"],
+        ["Passengers", "3"], ["Cargo", "2 tons"], ["Hull", "40"], ["Shipping", "—"],
+        ["Cost", "MCr 0.5"],
+    ]
+
+    def test_detects_vehicle_statblock(self):
+        self.assertTrue(is_vehicle_statblock(self.VEHICLE))
+
+    def test_detects_a_shattered_fragment(self):
+        # find_tables shatters a block; a half still carries >=2 markers.
+        frag = [["Range (Cruise)", "600 km"], ["Crew", "1"], ["Passengers", "3"],
+                ["Cargo", "2 tons"], ["Hull", "40"]]
+        self.assertTrue(is_vehicle_statblock(frag))
+
+    def test_robot_chassis_is_not_a_vehicle(self):
+        # Carries "Armour" but none of the distinctive markers → not a vehicle.
+        robot = [["Chassis", "Light"], ["Armour", "+2"], ["Power Packs", "4"],
+                 ["Efficiency", "High"], ["Resilient", "Yes"]]
+        self.assertFalse(is_vehicle_statblock(robot))
+
+    def test_rules_table_is_not_a_vehicle(self):
+        rules = [["Proficiency", "Bonus"], ["Untrained", "+0"],
+                 ["Weapon Speed", "1"], ["Damage Dice", "1d8"]]  # "Weapon Speed" != a marker
+        self.assertFalse(is_vehicle_statblock(rules))
+
+    def test_classify_routes_vehicle_to_transport(self):
+        # Routes regardless of chapter (structural), like a ship stat block.
+        self.assertEqual(classify_table("Working Craft", self.VEHICLE), "transport")
 
 
 class TestArmorSchema(unittest.TestCase):
