@@ -71,3 +71,30 @@ class ShipBuild:
     @property
     def display(self) -> str:
         return f"{self.hull_tons}t {self.config}".strip() if self.hull_tons else "Starship"
+
+
+@dataclass
+class RobotBuild:
+    """A Traveller robot build: a chassis (slot budget) with a locomotion and slotted
+    options. Costs are whole credits (robots are far cheaper than ships)."""
+
+    game: str
+    size: int = 0
+    locomotion: str = ""
+    base_cost: int = 0
+    base_hits: int = 0
+    slots_total: int = 0
+    slots_used: int = 0
+    options: list[str] = field(default_factory=list)
+    total_cost: int = 0
+    source: str = ""
+    log: list[str] = field(default_factory=list)
+    complete: bool = False
+
+    @property
+    def slots_free(self) -> int:
+        return max(0, self.slots_total - self.slots_used)
+
+    @property
+    def display(self) -> str:
+        return f"Size {self.size} {self.locomotion}".strip() if self.size else "Robot"

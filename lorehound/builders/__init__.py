@@ -11,4 +11,4 @@ package adds the builder registry, per-system component data + flows, and render
 Each system module is imported here for its registration side effect.
 """
 
-from . import armor, ship  # noqa: F401 — register the Traveller builders (armour, ship)
+from . import armor, robot, ship  # noqa: F401 — register the Traveller builders

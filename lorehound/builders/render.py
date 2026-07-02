@@ -5,7 +5,7 @@ unit-testable; the cog wraps it in a Components V2 card. Mirrors ``chargen.rende
 
 from __future__ import annotations
 
-from .model import ShipBuild, SuitBuild
+from .model import RobotBuild, ShipBuild, SuitBuild
 
 _ESC = "\x1b"
 
@@ -82,6 +82,37 @@ def built_ship_sheet(draft: ShipBuild) -> str:
     if draft.warnings:
         lines.append("⚠️ " + "; ".join(draft.warnings))
     lines.append(f"-# {tfree:.0f}t remain for fuel, staterooms, weapons & cargo")
+    if draft.source:
+        lines.append(f"-# Source: {draft.source}")
+    return "\n".join(lines)
+
+
+# --- robot builder --------------------------------------------------------------
+
+def robot_summary(draft: RobotBuild) -> str:
+    if not draft.size:
+        return ""
+    line = f"**Chassis** · Size {draft.size}"
+    if draft.locomotion:
+        line += f" {draft.locomotion}"
+    if draft.slots_total:
+        line += f"  ·  Slots **{draft.slots_used}/{draft.slots_total}**"
+    if draft.options:
+        line += f"  ·  {len(draft.options)} option" + ("s" if len(draft.options) != 1 else "")
+    return line
+
+
+def built_robot_sheet(draft: RobotBuild) -> str:
+    """The finished robot build as Markdown."""
+    lines = [f"## 🤖 {draft.display}", f"-# {draft.game} · robot build"]
+    block = [
+        f"{'Hits':<11}{draft.base_hits}",
+        f"{'Slots':<11}{draft.slots_used} / {draft.slots_total}  ({draft.slots_free} free)",
+        f"{'Cost':<11}Cr{draft.total_cost:,}",
+    ]
+    lines.append("```\n" + "\n".join(block) + "\n```")
+    if draft.options:
+        lines.append("**Installed** — " + ", ".join(draft.options))
     if draft.source:
         lines.append(f"-# Source: {draft.source}")
     return "\n".join(lines)
