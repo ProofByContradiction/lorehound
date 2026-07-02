@@ -676,14 +676,16 @@ def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
 
 
 def _build_stat_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tuple[str, Chunk]]]:
-    """Per (game, category) name→card list for stat-box chunks (spell/feat), so
-    /spell and /feat resolve a name straight to its card (same shape as the catalog
-    cards, reusing catalog_card_lookup + catalog_names). Each box is its own card."""
+    """Per (game, category) name→card list for stat-box chunks, so a name resolves
+    straight to its card (same shape as the catalog cards, reusing catalog_card_lookup
+    + catalog_names). Each box is its own card. ``chunks`` is already the stat-box set,
+    so this works for every box category (spell/feat and the derived hazard/item/…)
+    without naming them — the routing knowledge stays out of this function."""
     from collections import defaultdict
 
     out: dict[tuple[str, str], dict[str, tuple[str, Chunk]]] = defaultdict(dict)
     for c in chunks:
-        if c.category in ("spell", "feat") and c.rows:
+        if c.rows:
             name = c.section.split("›")[-1].strip()
             out[(c.game, c.category)].setdefault(name.lower(), (name, c))
     return {k: list(v.values()) for k, v in out.items()}
@@ -746,11 +748,14 @@ class RulesService:
         try:
             docs = self.drive.fetch_all(force=force)
             chunks: list[Chunk] = []
+            stat_box_chunks: list[Chunk] = []  # spell/feat/hazard/… boxes → name cards
             aux: dict[str, dict] = {}
             for doc in docs:
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
                 chunks.extend(_tables_for_doc(doc.name, doc.tables))
-                chunks.extend(_stat_box_chunks_for_doc(doc.name, doc.text))
+                boxes = _stat_box_chunks_for_doc(doc.name, doc.text)
+                chunks.extend(boxes)
+                stat_box_chunks.extend(boxes)
                 # Parse any prose-only chargen tables (e.g. T2K childhood) for games
                 # with a chargen system, so the flow can read them from the index.
                 game, _book = _split_game_and_file(doc.name)
@@ -764,9 +769,11 @@ class RulesService:
             careers = detect_careers(chunks)
             catalog = _build_catalog_names(chunks)
             catalog_cards = _build_catalog_cards(chunks)
-            # Stat-box cards (spell/feat) reuse the catalog card/name machinery so
-            # /spell and /feat resolve a name straight to its card like /item does.
-            stat_cards = _build_stat_cards(chunks)
+            # Stat-box cards (spell/feat and any derived category — hazard/item/…)
+            # reuse the catalog card/name machinery so a name resolves straight to its
+            # card like /item does. Box categories are distinct from the catalog's
+            # 'items'/'transport', so this never overwrites a catalog card.
+            stat_cards = _build_stat_cards(stat_box_chunks)
             catalog_cards.update(stat_cards)
             for key, cards in stat_cards.items():
                 catalog[key] = sorted(name for name, _ in cards)

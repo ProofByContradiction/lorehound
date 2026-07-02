@@ -51,10 +51,20 @@ CATEGORIES: dict[str, _Category] = {
     "card": _Category("🪖", "Careers", discord.Colour.dark_red(), True),
     "spell": _Category("✨", "Spell", discord.Colour.purple(), True),
     "feat": _Category("🎯", "Feat", discord.Colour.dark_orange(), True),
+    # Boxed entries beyond spells/feats, recovered by the derived-category parser
+    # (see stat_boxes._accepted_kinds). Each is its own named card, so they carry
+    # distinct badges and stay in /lookup.
+    "hazard": _Category("⚠️", "Hazard", discord.Colour.red(), True),
+    "item": _Category("🧪", "Item", discord.Colour.dark_teal(), True),
+    "rune": _Category("🪄", "Rune", discord.Colour.magenta(), True),
+    "snare": _Category("🪤", "Snare", discord.Colour.dark_grey(), True),
     # Excluded from /lookup; emoji/label/accent match the old unknown-category
     # fallbacks (📖 / "" / TEAL) so any stray reference hit renders identically.
     "reference": _Category("📖", "", TEAL, False),
 }
+# Box categories whose entries are each their own named card (resolve a name straight
+# to its card, like /spell), as opposed to the catalog list categories (items/transport).
+_NAME_CARD_CATEGORIES = frozenset({"spell", "feat", "hazard", "item", "rune", "snare"})
 # Categories the unified /lookup skips (derived from the registry so the call site
 # keeps its exact ``category not in _LOOKUP_SKIP`` membership test). == {"reference"}.
 _LOOKUP_SKIP = {name for name, c in CATEGORIES.items() if not c.in_lookup}
@@ -207,6 +217,10 @@ async def _spell_name_autocomplete(interaction, current):  # noqa: ANN001
 
 async def _feat_name_autocomplete(interaction, current):  # noqa: ANN001
     return await _catalog_autocomplete(interaction, current, "feat")
+
+
+async def _hazard_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _catalog_autocomplete(interaction, current, "hazard")
 
 
 async def _book_autocomplete(
@@ -631,9 +645,10 @@ class RulesCog(commands.Cog):
                 hits = _merge_item_hits(direct, _explode_to_items(hits, query))[:25]
                 if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
                     selected = 0
-            elif category in ("spell", "feat"):
-                # Each spell/feat is its own card — resolve the name directly. Fall
-                # back to the BM25 hits (description match) only when nothing names it.
+            elif category in _NAME_CARD_CATEGORIES:
+                # Each entry (spell/feat/hazard/…) is its own card — resolve the name
+                # directly. Fall back to the BM25 hits (description match) only when
+                # nothing names it.
                 direct = self.rules.catalog_card_lookup(
                     game, category, query, book=chosen_book
                 )
@@ -784,6 +799,27 @@ class RulesCog(commands.Cog):
         book: str | None = None,
     ) -> None:
         await self._lookup(interaction, "feat", source, query, book)
+
+    @app_commands.command(
+        name="hazard",
+        description="Show a HAZARD/snare/trap card — complexity, stealth & effect.",
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        query="A hazard — pick from the list, or type to search",
+        book="Optional: narrow to a single book",
+    )
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_hazard_name_autocomplete, book=_book_autocomplete
+    )
+    async def hazard(
+        self,
+        interaction: discord.Interaction,
+        source: str,
+        query: str,
+        book: str | None = None,
+    ) -> None:
+        await self._lookup(interaction, "hazard", source, query, book)
 
     @app_commands.command(
         name="class",

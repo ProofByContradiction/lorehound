@@ -583,6 +583,19 @@ class TestStatBoxCards(unittest.TestCase):
         cards = _build_stat_cards(self._chunks())[("Pathfinder (2e)", "spell")]
         self.assertEqual([n for n, _ in cards], ["Fireball"])
 
+    def test_build_stat_cards_covers_derived_categories(self):
+        # #62: recovered box categories (hazard/…) become name→card resolvable too,
+        # not just spell/feat. HAZARD is a derived kind, so it needs to recur (>=3).
+        from lorehound.rules import _build_stat_cards, _stat_box_chunks_for_doc
+        md = ("[[page 20]]\n##### **HIDDEN PIT HAZARD 3**\n**Stealth** trained\nA pit.\n\n"
+              "##### **SPIKED PIT HAZARD 4**\n**Stealth** trained\nSpikes.\n\n"
+              "##### **BOTTOMLESS PIT HAZARD 5**\n**Stealth** expert\nDeep.\n")
+        chunks = _stat_box_chunks_for_doc("Pathfinder (2e)/GMG.pdf", md)
+        self.assertTrue(all(c.category == "hazard" for c in chunks))
+        cards = _build_stat_cards(chunks)[("Pathfinder (2e)", "hazard")]
+        self.assertIn("Hidden Pit", [n for n, _ in cards])
+        self.assertEqual(len(cards), 3)
+
     def test_render_stat_box_card(self):
         from lorehound.tables import render_stat_box
         c = self._chunks()[0]
