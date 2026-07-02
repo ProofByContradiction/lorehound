@@ -359,12 +359,15 @@ def compute_ship(data: ShipData, *, hull_tons: int, config: str, thrust: int, ju
 def build_ship_data(rules, game: str) -> ShipData:
     """Snapshot the ship construction catalogue from the harvested markdown tables the
     index built for this game (see RulesService.markdown_tables)."""
-    tables = getattr(rules, "markdown_tables", {}).get(game, [])
+    all_tables = getattr(rules, "markdown_tables", {}).get(game, [])
     source = ""
-    for t in tables:
+    for t in all_tables:
         if "thrust potential" in t.title.lower() or "hull configuration" in t.title.lower():
             source = getattr(t, "source", "")
             break
+    # Scope to the construction book (High Guard) so another book's "Sensors"/"Power"
+    # tables don't get mixed into the catalogue.
+    tables = [t for t in all_tables if getattr(t, "source", "") == source] if source else all_tables
     return ship_data_from_tables(tables, game, source)
 
 

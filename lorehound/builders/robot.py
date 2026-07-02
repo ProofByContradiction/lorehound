@@ -146,17 +146,16 @@ def parse_options(tables) -> list[RobotOption]:
             continue
         ci_slots, ci_cost = hdr.index("slots"), len(hdr) - 1 - hdr[::-1].index("cost")
         for r in t.rows[1:]:
-            name = re.sub(r"<br>", " ", (r[0] or "")).strip()
-            if not name or not any(c.isalpha() for c in name):
+            name = re.sub(r"<br\s*/?>", " ", (r[0] or "")).strip()
+            # Skip blanks, junk ("(spare)"), and same-named repeats (an item listed at
+            # two TLs) — keep the first, so the pick-list has one entry per option.
+            if len(name) < 3 or name.startswith("(") or not any(c.isalpha() for c in name):
                 continue
             slots = _int(r[ci_slots]) if ci_slots < len(r) else None
-            cost = _credits(r[ci_cost]) if ci_cost < len(r) else 0
-            if slots is None:
+            if slots is None or name.lower() in seen:
                 continue
-            opt = RobotOption(name=name, slots=slots, cost=cost)
-            if opt.key not in seen:
-                seen.add(opt.key)
-                out.append(opt)
+            seen.add(name.lower())
+            out.append(RobotOption(name=name, slots=slots, cost=_credits(r[ci_cost]) if ci_cost < len(r) else 0))
     return out
 
 
@@ -238,12 +237,14 @@ class RobotReport:
 
 def build_robot_data(rules, game: str) -> RobotData:
     """Snapshot the robot construction catalogue from the harvested markdown tables."""
-    tables = getattr(rules, "markdown_tables", {}).get(game, [])
+    all_tables = getattr(rules, "markdown_tables", {}).get(game, [])
     source = ""
-    for t in tables:
-        if _col(t.rows[0], "cost", "multiplier") is not None:
+    for t in all_tables:
+        if t.rows and _col(t.rows[0], "cost", "multiplier") is not None:
             source = getattr(t, "source", "")
             break
+    # Scope to the Robot Handbook so other books' Item/Slots/Cost tables don't leak in.
+    tables = [t for t in all_tables if getattr(t, "source", "") == source] if source else all_tables
     return robot_data_from_tables(tables, game, source)
 
 

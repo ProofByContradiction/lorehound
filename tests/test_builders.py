@@ -197,6 +197,32 @@ class TestArmorData(unittest.TestCase):
         pistol = next(o for o in data.options if "pistol" in o.name)
         self.assertEqual((pistol.slots, pistol.cost), (1, 500))  # read from Slots + Cost columns
 
+    def test_build_data_scopes_options_to_the_suit_book(self):
+        # Options come only from the armour book (CSC), not other Traveller books whose
+        # Slots-headed tables list grades like "Basic" (ship/robot components).
+        from lorehound import pdf_tables  # noqa: F401
+
+        class _Chunk:
+            def __init__(self, game, rows, source):
+                self.game, self.rows, self.source, self.locator = game, rows, source, "p. 40"
+
+        csc_weapon = MarkdownTable(47, "Integrated Weapon Mount", [
+            ["Modification", "TL", "Effect", "Slots", "Cost"],
+            ["Weapon Mount (pistol)", "10", "Integral pistol", "1", "Cr500"],
+        ], source="Central Supply Catalogue")
+        hg_component = MarkdownTable(30, "Turret", [   # a High Guard Slots-headed table
+            ["Turret", "TL", "Slots", "Cost"], ["Basic", "10", "1", "MCr0.5"],
+        ], source="High Guard")
+        rules = type("R", (), {
+            "index": type("Idx", (), {"chunks": [
+                _Chunk("Traveller (Mongoose)", [_HEADER, _PLAIN], "Central Supply Catalogue")]})(),
+            "markdown_tables": {"Traveller (Mongoose)": [csc_weapon, hg_component]},
+        })()
+        data = build_armor_data(rules, "Traveller (Mongoose)")
+        names = [o.name for o in data.options]
+        self.assertIn("Weapon Mount (pistol)", names)
+        self.assertNotIn("Basic", names)                         # High Guard table excluded
+
 
 def _md(title, rows):
     return MarkdownTable(1, title, rows, source="CSC")

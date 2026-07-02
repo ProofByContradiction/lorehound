@@ -259,6 +259,7 @@ def build_armor_data(rules, game: str) -> ArmorData:
     gs = prof.grade_split if prof else None
     suits: list[ArmorSuit] = []
     source = ""
+    book = ""
     for c in getattr(rules.index, "chunks", []):
         if getattr(c, "game", None) != game:
             continue
@@ -268,10 +269,15 @@ def build_armor_data(rules, game: str) -> ArmorData:
             parsed = suits_from_rows(rows, grade_split=gs)
             if parsed:
                 suits = parsed
+                book = getattr(c, "source", "")
                 loc = getattr(c, "locator", "")
-                source = f"{getattr(c, 'source', '')}{' · ' + loc if loc else ''}".strip(" ·")
+                source = f"{book}{' · ' + loc if loc else ''}".strip(" ·")
                 break
-    md_tables = getattr(rules, "markdown_tables", {}).get(game, [])
+    # Options come from the SAME book as the suits (the armour catalogue), not every
+    # Traveller book's Slots-headed tables — else ship/robot grades ("Basic", "Small", …)
+    # would flood the list.
+    md_tables = [t for t in getattr(rules, "markdown_tables", {}).get(game, [])
+                 if getattr(t, "source", "") == book]
     options = armor_options_from_tables(md_tables)
     options.sort(key=lambda o: (o.slots, o.name))
     return ArmorData(game=game, suits=suits, options=options, source=source)
