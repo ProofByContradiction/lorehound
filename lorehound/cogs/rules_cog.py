@@ -62,12 +62,40 @@ CATEGORIES: dict[str, _Category] = {
     # fallbacks (📖 / "" / TEAL) so any stray reference hit renders identically.
     "reference": _Category("📖", "", TEAL, False),
 }
-# Box categories whose entries are each their own named card (resolve a name straight
-# to its card, like /spell), as opposed to the catalog list categories (items/transport).
-_NAME_CARD_CATEGORIES = frozenset({"spell", "feat", "hazard", "item", "rune", "snare"})
 # Categories the unified /lookup skips (derived from the registry so the call site
 # keeps its exact ``category not in _LOOKUP_SKIP`` membership test). == {"reference"}.
 _LOOKUP_SKIP = {name for name, c in CATEGORIES.items() if not c.in_lookup}
+
+# ── Domains: the closed set of library commands ─────────────────────────────
+# Each library command maps to a broad, cross-system DOMAIN; fine content categories
+# route into a domain via _TYPE_DOMAIN. This is the ONLY place a fine type is tied to a
+# command, so a new book's new box category needs no new command — it falls to the
+# default domain (and always shows in /lookup) until given a one-line home here.
+_TYPE_DOMAIN: dict[str, str] = {
+    "spell": "ability", "feat": "ability",                 # what a character has/does
+    "rules": "rule", "hazard": "rule", "snare": "rule",    # how the game works + GM/world
+    "items": "item", "item": "item", "rune": "item",       # physical gear / enhancements
+    "transport": "transport",
+    "tables": "table", "card": "class",   # claimed → their own commands, never defaulted
+}
+_DEFAULT_DOMAIN = "rule"           # an unmapped box category lands here (+ /lookup)
+_CATALOG_CATEGORIES = frozenset({"items", "transport"})  # wide catalogs → explode to rows
+# Presentation for the domain commands routed through _lookup.
+_DOMAIN_META: dict[str, tuple[str, str]] = {
+    "ability": ("✨", "Ability"), "rule": ("📖", "Rule"),
+    "item": ("🎒", "Item"), "transport": ("🚙", "Transport"),
+}
+
+
+def _domain_categories(rules: RulesService, game: str, domain: str) -> tuple[str, ...]:
+    """The fine categories a domain covers for ``game``: those mapped to it, plus — for
+    the default domain — any present category no domain claims (excluding the
+    /lookup-only 'reference'), so a never-seen box type is reachable with zero code."""
+    present = rules.categories(game)
+    cats = {c for c in present if _TYPE_DOMAIN.get(c) == domain}
+    if domain == _DEFAULT_DOMAIN:
+        cats |= {c for c in present if c not in _TYPE_DOMAIN and c != "reference"}
+    return tuple(sorted(cats))
 
 
 def _accent(category: str) -> discord.Colour:
@@ -186,11 +214,39 @@ async def _game_autocomplete(
     ][:25]
 
 
-async def _catalog_autocomplete(
-    interaction: discord.Interaction, current: str, category: str
+# Autocomplete name cache: the deduped, lowercased union of names for each
+# (game, domain), rebuilt only when the index is swapped (a reindex). Autocomplete
+# fires on every keystroke, so this keeps per-keystroke work to a substring scan of a
+# precomputed list instead of re-unioning categories (and re-lowercasing) each time.
+_AC_NAMES: dict[tuple[str, str], list[tuple[str, str]]] = {}
+_AC_INDEX: list = [None]   # the SearchIndex the cache was built against (identity check)
+
+
+def _domain_names(rules: RulesService, game: str, domain: str) -> list[tuple[str, str]]:
+    """Cached ``[(name, name_lower)]`` for a domain, invalidated when the index swaps."""
+    if _AC_INDEX[0] is not rules.index:     # a reindex replaced the index → cache stale
+        _AC_NAMES.clear()
+        _AC_INDEX[0] = rules.index
+    key = (game, domain)
+    cached = _AC_NAMES.get(key)
+    if cached is None:
+        seen: set[str] = set()
+        cached = []
+        for cat in _domain_categories(rules, game, domain):
+            for n in rules.catalog_names(game, cat):
+                nl = n.lower()
+                if nl not in seen:
+                    seen.add(nl)
+                    cached.append((n, nl))
+        _AC_NAMES[key] = cached
+    return cached
+
+
+async def _domain_name_autocomplete(
+    interaction: discord.Interaction, current: str, domain: str
 ) -> list[app_commands.Choice[str]]:
-    """Suggest item names from a game's weapon/vehicle catalogs (deduped at index
-    time). Free-text still works — these are just suggestions to browse by."""
+    """Suggest names across every category a domain covers (cached; see _domain_names).
+    Free-text still works — these are just suggestions to browse by."""
     rules: RulesService = interaction.client.rules_service  # type: ignore[attr-defined]
     game = _resolve_game(rules, getattr(interaction.namespace, "source", "") or "")
     if game is None:
@@ -198,38 +254,25 @@ async def _catalog_autocomplete(
     cur = current.lower()
     return [
         app_commands.Choice(name=n[:100], value=n[:100])
-        for n in rules.catalog_names(game, category)
-        if cur in n.lower()
+        for n, nl in _domain_names(rules, game, domain)
+        if cur in nl
     ][:25]
 
 
+async def _ability_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _domain_name_autocomplete(interaction, current, "ability")
+
+
 async def _item_name_autocomplete(interaction, current):  # noqa: ANN001
-    # /item spans the weapon/gear catalog ("items") plus boxed consumables ("item").
-    both = await _catalog_autocomplete(interaction, current, "items")
-    both += await _catalog_autocomplete(interaction, current, "item")
-    seen: set[str] = set()
-    out = []
-    for c in both:
-        if c.value.lower() not in seen:
-            seen.add(c.value.lower())
-            out.append(c)
-    return out[:25]
+    return await _domain_name_autocomplete(interaction, current, "item")
 
 
 async def _transport_name_autocomplete(interaction, current):  # noqa: ANN001
-    return await _catalog_autocomplete(interaction, current, "transport")
+    return await _domain_name_autocomplete(interaction, current, "transport")
 
 
-async def _spell_name_autocomplete(interaction, current):  # noqa: ANN001
-    return await _catalog_autocomplete(interaction, current, "spell")
-
-
-async def _feat_name_autocomplete(interaction, current):  # noqa: ANN001
-    return await _catalog_autocomplete(interaction, current, "feat")
-
-
-async def _hazard_name_autocomplete(interaction, current):  # noqa: ANN001
-    return await _catalog_autocomplete(interaction, current, "hazard")
+async def _rule_name_autocomplete(interaction, current):  # noqa: ANN001
+    return await _domain_name_autocomplete(interaction, current, "rule")
 
 
 async def _book_autocomplete(
@@ -607,13 +650,15 @@ class RulesCog(commands.Cog):
     async def _lookup(
         self,
         interaction: discord.Interaction,
-        category: str | None,
+        domain: str | None,
         source: str,
         query: str,
         book: str | None,
     ) -> None:
-        """Shared search flow. ``category=None`` is the unified /lookup: it searches
-        every category (badged by type), skipping the reference index."""
+        """Shared search flow for the domain commands. ``domain=None`` is the unified
+        /lookup (searches every category, badged by type). Otherwise ``domain`` is one
+        of ability/rule/item/transport, and we resolve names + search across all the
+        fine categories that domain covers (see :func:`_domain_categories`)."""
         game = await self._resolve_or_reject(interaction, source)
         if game is None:
             return
@@ -632,45 +677,37 @@ class RulesCog(commands.Cog):
                 return
 
         selected = None
-        if category is None:
+        is_catalog = False
+        if domain is None:
             # Unified search: over-fetch, drop the reference index, badge by type.
             hits = self.rules.search(query, game=game, book=chosen_book, top_k=12)
             hits = [h for h in hits if h.chunk.category not in _LOOKUP_SKIP][:8]
             emoji, label, badges = "🔎", "Lookup", True
         else:
+            cats = _domain_categories(self.rules, game, domain)
             hits = self.rules.search(
-                query, game=game, book=chosen_book, category=category, top_k=8
-            )
-            emoji, label = _meta(category)
+                query, game=game, book=chosen_book, categories=cats, top_k=8
+            ) if cats else []
+            emoji, label = _DOMAIN_META.get(domain, ("📖", domain.title()))
             badges = False
-            if category in ("items", "transport"):
-                # A weapon/vehicle catalog is a list of items, not one wide grid.
-                # Resolve the item name straight to its card (BM25 can't surface one
-                # row of a long catalog), then merge in exploded/prose hits as the
-                # free-text fallback. A single clearly-named match opens directly.
-                direct = self.rules.catalog_card_lookup(
-                    game, category, query, book=chosen_book
-                )
-                if category == "items":
-                    # Also surface boxed consumables recovered as the "item" category
-                    # (Pathfinder poisons/alchemical), so /item finds them alongside
-                    # the weapon/gear catalog.
-                    direct = _merge_item_hits(direct, self.rules.catalog_card_lookup(
-                        game, "item", query, book=chosen_book))
+            # Resolve a name straight to its card across every category in the domain
+            # (BM25 can't surface one row of a long catalog / one boxed entry).
+            direct: list[SearchHit] = []
+            for cat in cats:
+                found = self.rules.catalog_card_lookup(game, cat, query, book=chosen_book)
+                if found:
+                    direct = _merge_item_hits(direct, found)
+            is_catalog = bool(set(cats) & _CATALOG_CATEGORIES)
+            if is_catalog:
+                # A weapon/vehicle catalog is a list of items: explode the wide table to
+                # one pick per row, merged with the directly-resolved cards.
                 hits = _merge_item_hits(direct, _explode_to_items(hits, query))[:25]
-                if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
-                    selected = 0
-            elif category in _NAME_CARD_CATEGORIES:
-                # Each entry (spell/feat/hazard/…) is its own card — resolve the name
-                # directly. Fall back to the BM25 hits (description match) only when
-                # nothing names it.
-                direct = self.rules.catalog_card_lookup(
-                    game, category, query, book=chosen_book
-                )
-                if direct:
-                    hits = direct[:25]
-                    if hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
-                        selected = 0
+            elif direct:
+                # Named entries (spell/feat/hazard/…) win; BM25 (prose/description) is
+                # the fallback kept only when nothing names it.
+                hits = direct[:25]
+            if hits and hits[0].score >= 0.6 and sum(1 for h in hits if h.score >= 0.6) == 1:
+                selected = 0
         scope = f"**{game}**" + (f" › **{chosen_book}**" if chosen_book else "")
         if not hits:
             await interaction.response.send_message(
@@ -679,7 +716,7 @@ class RulesCog(commands.Cog):
             )
             return
 
-        noun = "item" if category in ("items", "transport") else "match"
+        noun = "item" if is_catalog else "match"
         subtitle = (
             f"in {scope} — **{len(hits)}** {noun}{'es' if noun == 'match' else 's'}. "
             "Pick one to read:"
@@ -716,15 +753,38 @@ class RulesCog(commands.Cog):
         await self._lookup(interaction, None, source, query, book)
 
     @app_commands.command(
-        name="rule",
-        description="Look up a RULE (how to play: stats, abilities, specialties).",
+        name="ability",
+        description="Look up an ABILITY a character has: spells, feats & other options.",
     )
     @app_commands.describe(
         source="Which game to search",
-        query="What to look up, e.g. sniper specialty, encumbrance, initiative",
+        query="A spell, feat, or other character option — pick from the list or type",
         book="Optional: narrow to a single book",
     )
-    @app_commands.autocomplete(source=_game_autocomplete, book=_book_autocomplete)
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_ability_name_autocomplete, book=_book_autocomplete
+    )
+    async def ability(
+        self,
+        interaction: discord.Interaction,
+        source: str,
+        query: str,
+        book: str | None = None,
+    ) -> None:
+        await self._lookup(interaction, "ability", source, query, book)
+
+    @app_commands.command(
+        name="rule",
+        description="Look up a RULE: how to play, conditions, hazards & GM content.",
+    )
+    @app_commands.describe(
+        source="Which game to search",
+        query="What to look up, e.g. encumbrance, initiative, a hazard/trap",
+        book="Optional: narrow to a single book",
+    )
+    @app_commands.autocomplete(
+        source=_game_autocomplete, query=_rule_name_autocomplete, book=_book_autocomplete
+    )
     async def rule(
         self,
         interaction: discord.Interaction,
@@ -732,10 +792,10 @@ class RulesCog(commands.Cog):
         query: str,
         book: str | None = None,
     ) -> None:
-        await self._lookup(interaction, "rules", source, query, book)
+        await self._lookup(interaction, "rule", source, query, book)
 
     @app_commands.command(
-        name="item", description="Look up an ITEM: gear, weapons, equipment."
+        name="item", description="Look up an ITEM: gear, weapons, equipment, consumables."
     )
     @app_commands.describe(
         source="Which game to search",
@@ -752,7 +812,7 @@ class RulesCog(commands.Cog):
         query: str,
         book: str | None = None,
     ) -> None:
-        await self._lookup(interaction, "items", source, query, book)
+        await self._lookup(interaction, "item", source, query, book)
 
     @app_commands.command(
         name="transport",
@@ -774,67 +834,6 @@ class RulesCog(commands.Cog):
         book: str | None = None,
     ) -> None:
         await self._lookup(interaction, "transport", source, query, book)
-
-    @app_commands.command(
-        name="spell", description="Show a SPELL/cantrip/focus/ritual card."
-    )
-    @app_commands.describe(
-        source="Which game to search",
-        query="A spell — pick from the list, or type to search",
-        book="Optional: narrow to a single book",
-    )
-    @app_commands.autocomplete(
-        source=_game_autocomplete, query=_spell_name_autocomplete, book=_book_autocomplete
-    )
-    async def spell(
-        self,
-        interaction: discord.Interaction,
-        source: str,
-        query: str,
-        book: str | None = None,
-    ) -> None:
-        await self._lookup(interaction, "spell", source, query, book)
-
-    @app_commands.command(
-        name="feat", description="Show a FEAT card — prerequisites & effect."
-    )
-    @app_commands.describe(
-        source="Which game to search",
-        query="A feat — pick from the list, or type to search",
-        book="Optional: narrow to a single book",
-    )
-    @app_commands.autocomplete(
-        source=_game_autocomplete, query=_feat_name_autocomplete, book=_book_autocomplete
-    )
-    async def feat(
-        self,
-        interaction: discord.Interaction,
-        source: str,
-        query: str,
-        book: str | None = None,
-    ) -> None:
-        await self._lookup(interaction, "feat", source, query, book)
-
-    @app_commands.command(
-        name="hazard",
-        description="Show a HAZARD/snare/trap card — complexity, stealth & effect.",
-    )
-    @app_commands.describe(
-        source="Which game to search",
-        query="A hazard — pick from the list, or type to search",
-        book="Optional: narrow to a single book",
-    )
-    @app_commands.autocomplete(
-        source=_game_autocomplete, query=_hazard_name_autocomplete, book=_book_autocomplete
-    )
-    async def hazard(
-        self,
-        interaction: discord.Interaction,
-        source: str,
-        query: str,
-        book: str | None = None,
-    ) -> None:
-        await self._lookup(interaction, "hazard", source, query, book)
 
     @app_commands.command(
         name="class",
