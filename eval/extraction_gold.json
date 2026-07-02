@@ -2,6 +2,7 @@
   "_readme": {
     "purpose": "Answer key for the EXTRACTION eval (scripts/extraction_eval.py). Each entry pins the correct STRUCTURE of one specific table in the indexed library so we can measure whether find_tables / the reconstructors captured it faithfully. Seeded across multiple books and table types (cross-ref lookups, multi-language references, weapon/vehicle stat blocks, roll-result tables, career skill grids, rank ladders, equipment lists) so the accuracy number reflects real cross-book performance, not one book. Each correction also becomes a labelled example for a future learned scanner (see the extraction-roadmap project memory).",
     "how_to_score": "Find the cached table by `match_cells` (cell values that identify it; the stated `page` disambiguates when several tables share those cells), then check `expect_headers` against the header row, `expect_row_labels` against the first column of the data rows (include the LAST label to guard the trailing-row drop), `min_rows`, and optional `max_rows`. A table is correct only if all hold. `max_rows` catches OVER-capture (two tables merged into one, stray lines pulled in) that a min-only check would pass.",
+    "expect_cells": "Optional list of externally-grounded cell-VALUE assertions, each `{row, col, value}`: locate the column by its header (`col`) and the data row by its first-cell label (`row`), then require the intersecting cell to equal `value` (normalized). Shape checks (headers/labels/row-count) can pass while a value is wrong — a column shear, a transposed or dropped cell. These pin the truth against the system's authority (see each entry's `external_source`: Archives of Nethys for PF2e, the Traveller SRD, etc.), so a mis-extraction that keeps the right shape still fails. Values are stored here once (verified against the source) so we don't re-fetch — see the external-source-fetch-rate-limits note.",
     "two_numbers": "summarize() reports `overall_accuracy` over ALL tables (the realistic cross-book picture — known_broken tables count as the failures they are) and `gate_accuracy` over only the known-good tables (the regression guard that exits non-zero below --threshold). When an extraction fix lands, flip `known_broken` to false so the table joins the gate.",
     "local_only": "Reads cache/*.json (the copyrighted books can't live in the repo), so it's a LOCAL guard like scripts/retrieval_eval.py. To validate an extraction fix: re-extract (python -m lorehound.index, or /reindex), then re-run the eval.",
     "books_covered": ["Twilight 2000 (4E) core", "Traveller (Mongoose 2022) core", "Traveller — Aliens of Charted Space Vol 2 (untuned by our reconstructors; surfaces real failures)", "Pathfinder 2e core (a new system + heavy Paizo styling; a deliberate stress test — most tables use shading not ruling lines, so find_tables misses them)"],
@@ -290,7 +291,12 @@
       "min_rows": 13,
       "known_broken": false,
       "what_was_wrong": "FIXED. The book prints this as two side-by-side Score|Modifier halves, double-struck for faux-bold — so extraction read every cell twice ('10–11 +0 10–11 +0'). Fix: de-dup same-position words, then detect the repeated column group and unroll the two halves into one clean Ability Score | Modifier table (1 to 24–25). Values match the official PF2e progression (floor((score-10)/2): 10→+0, 24-25→+7), confirmed via Archives of Nethys.",
-      "external_source": "https://2e.aonprd.com/Rules.aspx?ID=77"
+      "external_source": "https://2e.aonprd.com/Rules.aspx?ID=77",
+      "expect_cells": [
+        {"row": "10–11", "col": "Modifier", "value": "+0"},
+        {"row": "24–25", "col": "Modifier", "value": "+7"},
+        {"row": "1", "col": "Modifier", "value": "–5"}
+      ]
     },
     {
       "id": "pf2e-melee-weapons",
@@ -304,7 +310,13 @@
       "expect_row_labels": ["Longsword", "Maul", "Pick"],
       "min_rows": 10,
       "known_broken": false,
-      "what_was_wrong": "FIXED by Stage A + B. Stage A recovered this table (was missing entirely — Paizo's shaded weapons table has no ruling lines for find_tables/lines). Stage B's geometric reconstruction (picked over text-strategy by the lower fragment score) gives clean columns — Damage/Bulk/Hands/Group are now each their own column (no more 'Bu'/'lk' split), so the header check passes. (p282 Martial Weapons: Longsword 1d8 S Bulk 1, Maul 1d12 B Bulk 2, …) Cross-checked vs Archives of Nethys (Longsword 1d8 S, Bulk 1, Hands 1, Group Sword — exact match)."
+      "what_was_wrong": "FIXED by Stage A + B. Stage A recovered this table (was missing entirely — Paizo's shaded weapons table has no ruling lines for find_tables/lines). Stage B's geometric reconstruction (picked over text-strategy by the lower fragment score) gives clean columns — Damage/Bulk/Hands/Group are now each their own column (no more 'Bu'/'lk' split), so the header check passes. (p282 Martial Weapons: Longsword 1d8 S Bulk 1, Maul 1d12 B Bulk 2, …) Cross-checked vs Archives of Nethys (Longsword 1d8 S, Bulk 1, Hands 1, Group Sword — exact match).",
+      "external_source": "https://2e.aonprd.com/Weapons.aspx",
+      "expect_cells": [
+        {"row": "Longsword", "col": "Damage", "value": "1d8 S"},
+        {"row": "Longsword", "col": "Group", "value": "Sword"},
+        {"row": "Maul", "col": "Damage", "value": "1d12 B"}
+      ]
     },
     {
       "id": "pf2e-simple-weapons",
@@ -319,7 +331,14 @@
       "min_rows": 10,
       "known_broken": false,
       "what_was_wrong": "Recovered by Stage A + B (shaded table). Clean columns: Club 1d6 B / Bulk 1 / Group Club; Dagger 1d4 P / Bulk L / Group Knife. The column header isn't row 0 (an Unarmed/section banner precedes it) — the eval finds the best-matching header row. Cross-checked vs Archives of Nethys.",
-      "external_source": "https://2e.aonprd.com/Weapons.aspx"
+      "external_source": "https://2e.aonprd.com/Weapons.aspx",
+      "expect_cells": [
+        {"row": "Club", "col": "Damage", "value": "1d6 B"},
+        {"row": "Club", "col": "Group", "value": "Club"},
+        {"row": "Dagger", "col": "Damage", "value": "1d4 P"},
+        {"row": "Dagger", "col": "Bulk", "value": "L"},
+        {"row": "Dagger", "col": "Group", "value": "Knife"}
+      ]
     },
     {
       "id": "pf2e-sorcerer-spells-per-day",
@@ -334,7 +353,13 @@
       "min_rows": 21,
       "known_broken": false,
       "what_was_wrong": "Recovered by Stage A + B (shaded grid). Clean 12-column grid: character Level 1-20 × Cantrips + spell levels 1st-10th (level 1 = 5 cantrips, 3 first-level slots; level 3 = 5/4/3). Title and 'Spell Level' banner rows precede the column header (handled by best-row header detection). Cross-checked vs Archives of Nethys (Sorcerer).",
-      "external_source": "https://2e.aonprd.com/Classes.aspx?ID=13"
+      "external_source": "https://2e.aonprd.com/Classes.aspx?ID=13",
+      "expect_cells": [
+        {"row": "1", "col": "Cantrips", "value": "5"},
+        {"row": "1", "col": "1st", "value": "3"},
+        {"row": "3", "col": "1st", "value": "4"},
+        {"row": "3", "col": "2nd", "value": "3"}
+      ]
     }
   ]
 }

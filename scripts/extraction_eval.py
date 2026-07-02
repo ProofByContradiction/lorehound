@@ -87,6 +87,34 @@ def _find_table(entry: dict, tables: list[dict]) -> dict | None:
     return (same_page or matches)[0]
 
 
+def _check_cells(rows: list, header_row: list, expect_cells: list) -> list:
+    """Verify externally-grounded cell VALUES. Each assertion is
+    ``{"row": <label>, "col": <header>, "value": <expected>}`` (see a gold entry's
+    ``expect_cells`` / ``external_source``): locate the column by its header in
+    ``header_row``, the data row by its first-cell label, and compare the intersecting
+    cell to the expected value (all normalized). This catches value CORRUPTION — a
+    column shear, a transposed or dropped cell — that a header/label/row-count check
+    sails past. Returns one miss dict per failed assertion (naming what was wrong)."""
+    if not expect_cells:
+        return []
+    hdr = [_norm(c) for c in header_row]
+    bad: list = []
+    for want in expect_cells:
+        col_n, row_n, val_n = _norm(want.get("col")), _norm(want.get("row")), _norm(want.get("value"))
+        if col_n not in hdr:
+            bad.append({**want, "why": "column header not found"})
+            continue
+        ci = hdr.index(col_n)
+        data_row = next((r for r in rows if r and _norm(r[0]) == row_n), None)
+        if data_row is None:
+            bad.append({**want, "why": "row label not found"})
+            continue
+        got = _norm(data_row[ci]) if ci < len(data_row) else ""
+        if got != val_n:
+            bad.append({**want, "why": f"got {got!r}, want {val_n!r}"})
+    return bad
+
+
 def score_entry(entry: dict, tables: list[dict]) -> dict:
     """Check one gold table's structure against the cached extraction."""
     t = _find_table(entry, tables)
@@ -104,15 +132,19 @@ def score_entry(entry: dict, tables: list[dict]) -> dict:
     exp_labels = entry.get("expect_row_labels", [])
     # The column-header row isn't always row[0] — title / section / "Spell Level"
     # banner rows can precede it. Check expected headers against whichever row holds
-    # the most of them (row[0] when nothing's expected).
-    if exp_headers:
-        best = max(rows, key=lambda r: sum(h in {_norm(c) for c in r} for h in exp_headers))
-        header = {_norm(c) for c in best}
+    # the most of them (row[0] when nothing's expected). Keep the ORDERED header row
+    # too, so expect_cells can locate a column by name.
+    if exp_headers and rows:
+        header_row = max(rows, key=lambda r: sum(h in {_norm(c) for c in r} for h in exp_headers))
     else:
-        header = {_norm(c) for c in (rows[0] if rows else [])}
+        header_row = rows[0] if rows else []
+    header = {_norm(c) for c in header_row}
     labels = {_norm(r[0]) for r in rows[1:] if r}
     missing_headers = [h for h in exp_headers if h not in header]
     missing_labels = [lbl for lbl in exp_labels if _norm(lbl) not in labels]
+    # Externally-grounded value checks (AoN / SRD): a wrong cell value fails the entry
+    # just as a missing header does.
+    bad_cells = _check_cells(rows, header_row, entry.get("expect_cells", []))
     min_rows = int(entry.get("min_rows", 0))
     # ``max_rows`` (optional, 0 = no cap) catches OVER-capture — two tables merged
     # into one, or stray lines pulled in — which a min-only check would pass.
@@ -130,7 +162,8 @@ def score_entry(entry: dict, tables: list[dict]) -> dict:
         too_many=too_many,
         missing_headers=missing_headers,
         missing_labels=missing_labels,
-        correct=(not missing_headers and not missing_labels and rows_ok),
+        bad_cells=bad_cells,
+        correct=(not missing_headers and not missing_labels and rows_ok and not bad_cells),
     )
     return res
 
@@ -184,6 +217,8 @@ def _print_report(results: list[dict], summary: dict, threshold: float) -> None:
             print(f"       missing headers: {r['missing_headers']}")
         if r["missing_labels"]:
             print(f"       missing row labels: {r['missing_labels']}")
+        for bc in r.get("bad_cells") or []:
+            print(f"       bad cell [{bc.get('row')} × {bc.get('col')}]: {bc.get('why')}")
     s = summary
     print(
         f"\n— overall structural accuracy: {s['overall_accuracy']:.0%} over all "

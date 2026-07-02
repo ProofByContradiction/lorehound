@@ -580,6 +580,40 @@ class TestExtractionScorer(unittest.TestCase):
         self.assertEqual(s["gated_entries"], 1)
         self.assertEqual(s["advisory_entries"], 1)
 
+    # --- externally-grounded cell-value checks (expect_cells) ---
+    def test_correct_cell_value_passes(self):
+        entry = {**_ENTRY, "expect_cells": [{"row": "D6", "col": "D8", "value": "74%"}]}
+        r = score_entry(entry, [_GOOD])
+        self.assertTrue(r["correct"])
+        self.assertEqual(r["bad_cells"], [])
+
+    def test_wrong_cell_value_fails_and_names_the_miss(self):
+        # Shape is intact (headers/labels/rows all fine) but one cell is corrupted —
+        # the value check is the ONLY thing that catches it.
+        entry = {**_ENTRY, "expect_cells": [{"row": "D6", "col": "D8", "value": "99%"}]}
+        r = score_entry(entry, [_GOOD])
+        self.assertFalse(r["correct"])
+        self.assertEqual(len(r["bad_cells"]), 1)
+        self.assertIn("74%", r["bad_cells"][0]["why"].upper())  # reports what it found
+
+    def test_unknown_column_is_flagged(self):
+        entry = {**_ENTRY, "expect_cells": [{"row": "D6", "col": "D14", "value": "x"}]}
+        r = score_entry(entry, [_GOOD])
+        self.assertFalse(r["correct"])
+        self.assertEqual(r["bad_cells"][0]["why"], "column header not found")
+
+    def test_unknown_row_label_is_flagged(self):
+        entry = {**_ENTRY, "expect_cells": [{"row": "D99", "col": "D8", "value": "x"}]}
+        r = score_entry(entry, [_GOOD])
+        self.assertFalse(r["correct"])
+        self.assertEqual(r["bad_cells"][0]["why"], "row label not found")
+
+    def test_no_expect_cells_leaves_correctness_untouched(self):
+        # Back-compat: entries without expect_cells score exactly as before.
+        r = score_entry(_ENTRY, [_GOOD])
+        self.assertTrue(r["correct"])
+        self.assertEqual(r["bad_cells"], [])
+
 
 def _w(x0, y0, x1, y1, text):
     """A minimal PyMuPDF word tuple (x0, y0, x1, y1, text, block, line, word)."""
