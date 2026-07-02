@@ -139,6 +139,66 @@ def suits_from_rows(rows: list[list[str]], *, grade_split=None) -> list[ArmorSui
     return suits
 
 
+# --- installable slot options ----------------------------------------------------
+
+# An armour OPTION table (CSC "Armour" chapter) is 3 columns — TL · effect/name ·
+# slot cost — with the identifying title lost to a leaked caption ("Effect"/"TL"). We
+# recover the options by shape: a TL in the low range, some describing text, and a slot
+# cost that's a small integer or "—" (a zero-slot option). The effect text is the
+# option's name (its category title didn't survive extraction).
+_TL_MAX = 20
+_SLOT_MAX = 40
+
+
+def _is_tl(cell: str) -> bool:
+    c = (cell or "").strip()
+    return c.isdigit() and 1 <= int(c) <= _TL_MAX
+
+
+def _slot_cost(cell: str) -> int | None:
+    """Slot cost of an option cell: a small integer, or 0 for ``—`` (zero-slot). None if
+    it isn't a plausible slot value (so a non-option table is rejected)."""
+    c = (cell or "").strip()
+    if c in ("—", "-", ""):
+        return 0
+    return int(c) if c.isdigit() and int(c) <= _SLOT_MAX else None
+
+
+@dataclass(frozen=True)
+class ArmorOption:
+    """One installable option: its name (the effect text), tech level, and slot cost."""
+
+    name: str
+    tl: str
+    slots: int
+
+    @property
+    def key(self) -> str:
+        return f"{self.name}|{self.tl}|{self.slots}"
+
+    @property
+    def label(self) -> str:
+        unit = "slot" if self.slots == 1 else "slots"
+        tl = f"TL{self.tl} · " if self.tl else ""
+        return f"{self.name} · {tl}{self.slots} {unit}"
+
+
+def options_from_rows(rows: list[list[str]]) -> list[ArmorOption]:
+    """Parse a 3-column option table into :class:`ArmorOption`\\ s. Rejects a table whose
+    rows don't fit the TL · name · slot-cost shape (returns ``[]``)."""
+    out: list[ArmorOption] = []
+    three = [r for r in rows if len(r) == 3]
+    if len(three) < 2:
+        return []
+    for r in three:
+        tl, name, slot = (r[0] or "").strip(), (r[1] or "").strip(), r[2]
+        cost = _slot_cost(slot)
+        if _is_tl(tl) and name and cost is not None:
+            out.append(ArmorOption(name=name, tl=tl, slots=cost))
+    # Require the table to be *mostly* option rows, else it isn't an option table.
+    return out if len(out) >= 2 and len(out) >= 0.6 * len(three) else []
+
+
 # --- the builder: catalogue snapshot + interactive flow --------------------------
 
 
@@ -149,6 +209,7 @@ class ArmorData:
 
     game: str
     suits: list[ArmorSuit] = field(default_factory=list)
+    options: list[ArmorOption] = field(default_factory=list)
     source: str = ""
 
     @property
@@ -170,18 +231,34 @@ def build_armor_data(rules, game: str) -> ArmorData:
 
     prof = sources.profile_for(game)
     gs = prof.grade_split if prof else None
+    suits: list[ArmorSuit] = []
+    source = ""
+    options: list[ArmorOption] = []
+    seen_opt: set[str] = set()
     for c in getattr(rules.index, "chunks", []):
         if getattr(c, "game", None) != game:
             continue
         rows = getattr(c, "rows", None) or []
+        if not rows:
+            continue
         cells = {(x or "").strip().upper() for r in rows for x in r}
-        if {"STR", "DEX", "SLOTS"} <= cells and ("ARMOUR TYPE" in cells or "PROTECTION" in cells):
-            suits = suits_from_rows(rows, grade_split=gs)
-            if suits:
+        if not suits and {"STR", "DEX", "SLOTS"} <= cells and (
+            "ARMOUR TYPE" in cells or "PROTECTION" in cells
+        ):
+            parsed = suits_from_rows(rows, grade_split=gs)
+            if parsed:
+                suits = parsed
                 loc = getattr(c, "locator", "")
-                src = f"{getattr(c, 'source', '')}{' · ' + loc if loc else ''}".strip(" ·")
-                return ArmorData(game=game, suits=suits, source=src)
-    return ArmorData(game=game, suits=[])
+                source = f"{getattr(c, 'source', '')}{' · ' + loc if loc else ''}".strip(" ·")
+            continue
+        # Installable options live in the Armour chapter (not Augments = cybernetics).
+        if (getattr(c, "section", "") or "").split(" › ", 1)[0].strip() == "Armour":
+            for opt in options_from_rows(rows):
+                if opt.key not in seen_opt:
+                    seen_opt.add(opt.key)
+                    options.append(opt)
+    options.sort(key=lambda o: (o.slots, o.name))
+    return ArmorData(game=game, suits=suits, options=options, source=source)
 
 
 def _short_protection(protection: str) -> str:
@@ -244,6 +321,46 @@ def armor_flow(ctx):
         suit = grades[0]
 
     _apply_suit(draft, suit, data.source)
+    if data.options:
+        yield from _options_loop(ctx, data.options)
+
+
+_DONE = "__done__"
+
+
+def _options_loop(ctx, options: list[ArmorOption]):
+    """Add options one at a time until the user finishes or the slot budget is full.
+    Each add is its own step, so the engine's Back removes the last option (replay)."""
+    draft = ctx.draft
+    i = 0
+    while True:
+        free = draft.slots_free
+        addable = [o for o in options if o.slots <= free]
+        if not addable:
+            draft.log.append("Slot budget full.")
+            return
+        shown = addable[:24]  # leave a slot for Finish within the 25-option Select cap
+        detail = f"{free} of {draft.slots_total} slots free"
+        if len(addable) > len(shown):
+            detail += f" · showing the {len(shown)} cheapest of {len(addable)} that fit"
+        pick = yield Step(
+            id=f"option-{i}",
+            kind=StepKind.CHOICE,
+            essential=True,
+            prompt="Add an option, or finish",
+            detail=detail,
+            options=[Option(value=_DONE, label="✓ Finish — build as-is")]
+            + [Option(value=o.key, label=o.label[:100]) for o in shown],
+        )
+        if pick.value == _DONE:
+            return
+        chosen = next((o for o in addable if o.key == pick.value), None)
+        if chosen is None:
+            return
+        draft.options.append(chosen.name)
+        draft.slots_used += chosen.slots
+        draft.log.append(f"+ {chosen.name} ({chosen.slots} slots)")
+        i += 1
 
 
 register(SystemBuilder(

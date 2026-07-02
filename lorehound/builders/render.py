@@ -19,7 +19,12 @@ def build_summary(draft: SuitBuild) -> str:
     choices are made. Empty until a base suit is chosen."""
     if not draft.base:
         return ""
-    return f"**Base** · {draft.display}"
+    line = f"**Base** · {draft.display}"
+    if draft.slots_total:
+        line += f"  ·  Slots **{draft.slots_used}/{draft.slots_total}**"
+    if draft.options:
+        line += f"  ·  {len(draft.options)} option" + ("s" if len(draft.options) != 1 else "")
+    return line
 
 
 def _stat_block(draft: SuitBuild) -> str:

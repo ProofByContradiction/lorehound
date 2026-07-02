@@ -12,9 +12,11 @@ import unittest
 
 from lorehound.builders.armor import (
     ArmorData,
+    ArmorOption,
     ArmorSuit,
     armor_flow,
     build_armor_data,
+    options_from_rows,
     suits_from_rows,
 )
 from lorehound.builders.model import SuitBuild
@@ -166,12 +168,69 @@ class TestArmorData(unittest.TestCase):
             "chunks": [_Chunk("Some Other Game", [_HEADER, _PLAIN])]})()})()
         self.assertEqual(build_armor_data(rules, "Traveller (Mongoose)").suits, [])
 
+    def test_build_data_collects_armour_chapter_options(self):
+        from lorehound import pdf_tables  # noqa: F401
+
+        class _Chunk:
+            def __init__(self, game, rows, section=""):
+                self.game, self.rows, self.section = game, rows, section
+                self.source, self.locator = "CSC", "p. 40"
+
+        rules = type("R", (), {"index": type("Idx", (), {"chunks": [
+            _Chunk("Traveller (Mongoose)", [_HEADER, _PLAIN], section="Armour › Powered Armour"),
+            _Chunk("Traveller (Mongoose)", _OPT_TABLE, section="Armour › Weapon Mounts"),
+            # An Augments-chapter table (cybernetics) must NOT become an armour option.
+            _Chunk("Traveller (Mongoose)", [["11", "Cybernetic eye", "0"]], section="Augments › Eyes"),
+        ]})()})()
+        data = build_armor_data(rules, "Traveller (Mongoose)")
+        self.assertEqual(len(data.suits), 3)                          # from the master table
+        names = [o.name for o in data.options]
+        self.assertIn("Integral pistol", names)
+        self.assertIn("Automatic first aid", names)
+        self.assertNotIn("Cybernetic eye", names)                     # Augments excluded
+        self.assertEqual(data.options, sorted(data.options, key=lambda o: (o.slots, o.name)))
+
+
+_OPT_TABLE = [
+    ["10", "Integral pistol", "1"],
+    ["10", "Integral long arm", "2"],
+    ["10", "Integral heavy weapon", "10"],
+    ["10", "Automatic first aid", "—"],   # zero-slot option
+]
+
+
+class TestArmorOptions(unittest.TestCase):
+    def test_parses_tl_name_slots(self):
+        opts = options_from_rows(_OPT_TABLE)
+        self.assertEqual([(o.name, o.tl, o.slots) for o in opts], [
+            ("Integral pistol", "10", 1),
+            ("Integral long arm", "10", 2),
+            ("Integral heavy weapon", "10", 10),
+            ("Automatic first aid", "10", 0),   # "—" → zero slots
+        ])
+
+    def test_option_label(self):
+        self.assertEqual(ArmorOption("Sensors", "14", 2).label, "Sensors · TL14 · 2 slots")
+        self.assertEqual(ArmorOption("Pistol", "10", 1).label, "Pistol · TL10 · 1 slot")
+
+    def test_rejects_a_non_option_table(self):
+        self.assertEqual(options_from_rows([["Weapon", "Damage", "Bulk"],
+                                            ["Sword", "1d8", "1"]]), [])
+
+    def test_rejects_table_with_implausible_slot_values(self):
+        # A cost/price column (Cr…) in slot position isn't a slot count.
+        self.assertEqual(options_from_rows([["10", "Ballistic Vest", "Cr500"],
+                                            ["12", "Ceramic", "Cr12000"]]), [])
+
 
 class TestArmorFlow(unittest.TestCase):
-    def _session(self, suits=_SUITS):
-        data = ArmorData(game="T", suits=suits, source="CSC · p. 40")
+    def _session(self, suits=_SUITS, options=None):
+        data = ArmorData(game="T", suits=suits, options=options or [], source="CSC · p. 40")
         return ChargenSession(armor_flow, mode=FAITHFUL, draft=SuitBuild(game="T"),
                               data=data, draft_factory=lambda: SuitBuild(game="T"))
+
+    def _one_suit(self):
+        return [ArmorSuit("Battle Dress", "", "+22", "13", "+4", "+4", 16, "Cr200000")]
 
     def test_pick_family_then_grade_completes_the_build(self):
         s = self._session()
@@ -205,6 +264,43 @@ class TestArmorFlow(unittest.TestCase):
                            draft_factory=lambda: SuitBuild(game="T"))
         self.assertTrue(s.complete)
         self.assertEqual(s.draft.base, "")
+
+    def test_options_loop_installs_and_tracks_slots(self):
+        opts = [ArmorOption("Integral pistol", "10", 1), ArmorOption("Sensors", "14", 2)]
+        s = self._session(suits=self._one_suit(), options=opts)
+        s.resolve("Battle Dress")                       # single grade → straight to options
+        self.assertTrue(s.current.id.startswith("option-"))
+        s.resolve("Integral pistol|10|1")               # add pistol
+        self.assertEqual(s.draft.slots_used, 1)
+        self.assertEqual(s.draft.options, ["Integral pistol"])
+        s.resolve("Sensors|14|2")                        # add sensors
+        self.assertEqual(s.draft.slots_used, 3)
+        s.resolve("__done__")                            # finish
+        self.assertTrue(s.complete)
+        self.assertEqual(s.draft.options, ["Integral pistol", "Sensors"])
+
+    def test_back_removes_the_last_option(self):
+        opts = [ArmorOption("Integral pistol", "10", 1), ArmorOption("Sensors", "14", 2)]
+        s = self._session(suits=self._one_suit(), options=opts)
+        s.resolve("Battle Dress")
+        s.resolve("Integral pistol|10|1")               # slots_used 1
+        self.assertTrue(s.can_back)
+        s.back()                                         # undo the add (replay)
+        self.assertEqual(s.draft.options, [])
+        self.assertEqual(s.draft.slots_used, 0)
+        self.assertTrue(s.current.id.startswith("option-"))
+
+    def test_only_options_that_fit_are_offered(self):
+        # A 16-slot suit with 1 slot free must not offer a 10-slot option.
+        opts = [ArmorOption("Integral pistol", "10", 1), ArmorOption("Heavy weapon", "10", 10)]
+        suit = [ArmorSuit("Battle Dress", "", "+22", "13", "+4", "+4", 11, "Cr200000")]
+        s = self._session(suits=suit, options=opts)
+        s.resolve("Battle Dress")
+        s.resolve("Heavy weapon|10|10")                  # 10 of 11 used, 1 free
+        values = {o.value for o in s.current.options}
+        self.assertIn("Integral pistol|10|1", values)    # 1 slot fits
+        self.assertNotIn("Heavy weapon|10|10", values)   # 10 slots no longer fit
+        self.assertIn("__done__", values)
 
 
 class TestBuiltSuitRender(unittest.TestCase):
