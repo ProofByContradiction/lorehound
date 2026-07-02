@@ -229,9 +229,9 @@ def classify_table(chapter: str, rows: list[list[str]], profile=None) -> str:
     # (e.g. example ships in sourcebook chapters like "Exploration"). Construction
     # option tables don't match (their rows are options, not systems). Checked
     # before the noise guard so a compact block isn't dropped on the alpha floor.
-    from .tables import is_ship_statblock
+    from .tables import is_ship_statblock, is_vehicle_statblock
 
-    if is_ship_statblock(rows):
+    if is_ship_statblock(rows) or is_vehicle_statblock(rows):
         return "transport"
 
     alpha_cells = sum(1 for c in rows[0] if any(ch.isalpha() for ch in c))
