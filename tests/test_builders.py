@@ -319,5 +319,38 @@ class TestBuiltSuitRender(unittest.TestCase):
         self.assertIn("Battle Dress", build_summary(self._built()))
 
 
+class TestBuilderRegistry(unittest.TestCase):
+    """The registry must support several buildables per game and resolve by kind — the
+    forward-compatible surface for adding ships/robots when their data is ready."""
+
+    def _reg(self):
+        from lorehound.builders import registry
+        return registry, registry.SystemBuilder
+
+    def test_multiple_builders_per_game_resolve_by_kind(self):
+        reg, SB = self._reg()
+        saved = list(reg._REGISTRY)
+        try:
+            reg._REGISTRY.clear()
+            armour = SB(name="A", games=("traveller",), kind="armour", build_flow=lambda ctx: iter(()))
+            ship = SB(name="S", games=("traveller",), kind="ship", build_flow=lambda ctx: iter(()))
+            reg.register(armour)
+            reg.register(ship)
+            self.assertEqual(len(reg.builders_for("Traveller (Mongoose)")), 2)
+            self.assertIs(reg.builder_for("Traveller (Mongoose)", "ship"), ship)
+            self.assertIs(reg.builder_for("Traveller (Mongoose)"), armour)   # first when no kind
+            self.assertIsNone(reg.builder_for("Traveller (Mongoose)", "mecha"))
+            self.assertEqual(reg.builders_for("Twilight 2000"), [])
+        finally:
+            reg._REGISTRY[:] = saved
+
+    def test_real_armour_builder_is_registered(self):
+        reg, _ = self._reg()
+        import lorehound.builders  # noqa: F401 — ensures the armour builder is registered
+        b = reg.builder_for("Traveller (Mongoose 2E)", "armour")
+        self.assertIsNotNone(b)
+        self.assertEqual(b.noun, "powered-armour suit")
+
+
 if __name__ == "__main__":
     unittest.main()

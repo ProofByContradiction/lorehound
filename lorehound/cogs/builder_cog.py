@@ -45,6 +45,16 @@ def _unsupported(game: str) -> str:
     return f"🚧 There's no builder for **{game}** yet.{avail}"
 
 
+def _no_such_kind(game: str, kind: str, builders) -> str:
+    kinds = ", ".join(f"`{b.kind}`" for b in builders)
+    return f"🔎 **{game}** has no **{kind}** builder. Available: {kinds}."
+
+
+def _pick_a_kind(game: str, builders) -> str:
+    kinds = ", ".join(f"`{b.kind}` ({b.noun})" for b in builders)
+    return f"🛠️ **{game}** has several things to build — add `kind:` to pick one: {kinds}."
+
+
 class _Btn(discord.ui.Button):
     """A button that calls a stored coroutine handler (avoids a subclass per action)."""
 
@@ -202,6 +212,26 @@ async def _game_autocomplete(
     return [app_commands.Choice(name=g, value=g) for g in games if cur in g.lower()][:25]
 
 
+async def _kind_autocomplete(
+    interaction: discord.Interaction, current: str
+) -> list[app_commands.Choice[str]]:
+    """The buildable kinds for the game named in the ``source`` option (so a game with
+    several buildables — armour, ship, … — offers them here)."""
+    rules = getattr(interaction.client, "rules_service", None)
+    if rules is None:
+        return []
+    source = (interaction.namespace.source or "") if interaction.namespace else ""
+    game = _resolve_game(rules, source)
+    if game is None:
+        return []
+    cur = current.lower()
+    return [
+        app_commands.Choice(name=f"{b.kind} — {b.noun}", value=b.kind)
+        for b in registry.builders_for(game)
+        if cur in b.kind.lower()
+    ][:25]
+
+
 class BuilderCog(commands.Cog):
     def __init__(self, bot: commands.Bot, rules) -> None:
         self.bot = bot
@@ -211,9 +241,14 @@ class BuilderCog(commands.Cog):
         name="build",
         description="Build a piece of equipment — e.g. a Traveller powered-armour suit.",
     )
-    @app_commands.describe(source="Which game to build for")
-    @app_commands.autocomplete(source=_game_autocomplete)
-    async def build(self, interaction: discord.Interaction, source: str) -> None:
+    @app_commands.describe(
+        source="Which game to build for",
+        kind="What to build (only needed when a game offers several)",
+    )
+    @app_commands.autocomplete(source=_game_autocomplete, kind=_kind_autocomplete)
+    async def build(
+        self, interaction: discord.Interaction, source: str, kind: str | None = None
+    ) -> None:
         if self.rules.drive is None:
             await interaction.response.send_message(_NOT_CONFIGURED, ephemeral=True)
             return
@@ -229,9 +264,19 @@ class BuilderCog(commands.Cog):
                 f"🔎 I don't have a game called **{source}**. Try `/sources`.", ephemeral=True
             )
             return
-        system = registry.builder_for(game)
-        if system is None:
+        builders = registry.builders_for(game)
+        if not builders:
             await interaction.response.send_message(_unsupported(game), ephemeral=True)
+            return
+        if kind:
+            system = registry.builder_for(game, kind)
+            if system is None:
+                await interaction.response.send_message(_no_such_kind(game, kind, builders), ephemeral=True)
+                return
+        elif len(builders) == 1:
+            system = builders[0]
+        else:
+            await interaction.response.send_message(_pick_a_kind(game, builders), ephemeral=True)
             return
         session = _new_session(self.bot, system, game)
         view = BuilderView(

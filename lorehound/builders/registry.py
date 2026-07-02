@@ -20,6 +20,11 @@ class SystemBuilder:
     name: str
     games: tuple[str, ...]          # game-name substrings this matches (lowercased)
     build_flow: FlowFactory         # (ctx) -> flow generator
+    # A game can have several buildables (armour, ship, …); ``kind`` is the short
+    # selector the ``/build type:`` option offers, and ``noun`` names the thing built.
+    kind: str = ""
+    noun: str = "item"
+    emoji: str = "🛠️"
     # Snapshot the component catalogue the flow needs from RulesService, ONCE at session
     # start, so an in-flight build stays consistent even if the index is rebuilt mid-flow.
     # Returns the object passed as the flow context's ``data``. None → needs no data.
@@ -37,12 +42,18 @@ def register(builder: SystemBuilder) -> None:
     _REGISTRY.append(builder)
 
 
-def builder_for(game: str) -> SystemBuilder | None:
-    """The first registered builder whose game matches, else None (unsupported)."""
-    for b in _REGISTRY:
-        if b.matches(game):
-            return b
-    return None
+def builders_for(game: str) -> list[SystemBuilder]:
+    """Every registered builder whose game matches (a game can offer several)."""
+    return [b for b in _REGISTRY if b.matches(game)]
+
+
+def builder_for(game: str, kind: str | None = None) -> SystemBuilder | None:
+    """The matching builder for ``game`` — the one whose ``kind`` matches when given,
+    else the sole/first one. None if the game has no builder (or no such kind)."""
+    matches = builders_for(game)
+    if kind:
+        return next((b for b in matches if b.kind == kind), None)
+    return matches[0] if matches else None
 
 
 def supported_games() -> list[str]:

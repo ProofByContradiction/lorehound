@@ -366,6 +366,9 @@ def _options_loop(ctx, options: list[ArmorOption]):
 register(SystemBuilder(
     name="Traveller — powered armour / Battle Dress",
     games=("traveller",),
+    kind="armour",
+    noun="powered-armour suit",
+    emoji="🛡️",
     build_flow=armor_flow,
     build_data=build_armor_data,
 ))
