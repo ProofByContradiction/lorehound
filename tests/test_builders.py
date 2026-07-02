@@ -15,13 +15,14 @@ from lorehound.builders.armor import (
     ArmorOption,
     ArmorSuit,
     armor_flow,
+    armor_options_from_tables,
     build_armor_data,
-    options_from_rows,
     suits_from_rows,
 )
 from lorehound.builders.model import SuitBuild
 from lorehound.builders.render import build_summary, built_suit_sheet
 from lorehound.chargen.engine import FAITHFUL, ChargenSession
+from lorehound.markdown_tables import MarkdownTable
 from lorehound.sources import GradeSplit
 
 # The Traveller profile's real grade-split config (detect PROTECTION+TL, count on TL).
@@ -168,59 +169,66 @@ class TestArmorData(unittest.TestCase):
             "chunks": [_Chunk("Some Other Game", [_HEADER, _PLAIN])]})()})()
         self.assertEqual(build_armor_data(rules, "Traveller (Mongoose)").suits, [])
 
-    def test_build_data_collects_armour_chapter_options(self):
+    def test_build_data_collects_slot_options_from_markdown(self):
         from lorehound import pdf_tables  # noqa: F401
 
         class _Chunk:
-            def __init__(self, game, rows, section=""):
-                self.game, self.rows, self.section = game, rows, section
-                self.source, self.locator = "CSC", "p. 40"
+            def __init__(self, game, rows):
+                self.game, self.rows, self.source, self.locator = game, rows, "CSC", "p. 40"
 
-        rules = type("R", (), {"index": type("Idx", (), {"chunks": [
-            _Chunk("Traveller (Mongoose)", [_HEADER, _PLAIN], section="Armour › Powered Armour"),
-            _Chunk("Traveller (Mongoose)", _OPT_TABLE, section="Armour › Weapon Mounts"),
-            # An Augments-chapter table (cybernetics) must NOT become an armour option.
-            _Chunk("Traveller (Mongoose)", [["11", "Cybernetic eye", "0"]], section="Augments › Eyes"),
-        ]})()})()
+        weapons = MarkdownTable(47, "Integrated Weapon Mount", [
+            ["Modification", "TL", "Effect", "Slots", "Cost"],
+            ["Weapon Mount (pistol)", "10", "Integral pistol", "1", "Cr500"],
+            ["Weapon Mount (heavy)", "10", "Integral heavy weapon", "10", "Cr5000"],
+        ], source="CSC")
+        # A kg-headed accessory table must NOT be mistaken for slot options.
+        kg = MarkdownTable(27, "Tactical Video Suite", [
+            ["Modification", "TL", "Effect", "Kg"], ["Life support", "8", "6 hours", "10"],
+        ], source="CSC")
+        rules = type("R", (), {
+            "index": type("Idx", (), {"chunks": [_Chunk("Traveller (Mongoose)", [_HEADER, _PLAIN])]})(),
+            "markdown_tables": {"Traveller (Mongoose)": [weapons, kg]},
+        })()
         data = build_armor_data(rules, "Traveller (Mongoose)")
-        self.assertEqual(len(data.suits), 3)                          # from the master table
+        self.assertEqual(len(data.suits), 3)
         names = [o.name for o in data.options]
-        self.assertIn("Integral pistol", names)
-        self.assertIn("Automatic first aid", names)
-        self.assertNotIn("Cybernetic eye", names)                     # Augments excluded
-        self.assertEqual(data.options, sorted(data.options, key=lambda o: (o.slots, o.name)))
+        self.assertIn("Weapon Mount (pistol)", names)
+        self.assertNotIn("Life support", names)                  # kg column, not a slot cost
+        pistol = next(o for o in data.options if "pistol" in o.name)
+        self.assertEqual((pistol.slots, pistol.cost), (1, 500))  # read from Slots + Cost columns
 
 
-_OPT_TABLE = [
-    ["10", "Integral pistol", "1"],
-    ["10", "Integral long arm", "2"],
-    ["10", "Integral heavy weapon", "10"],
-    ["10", "Automatic first aid", "—"],   # zero-slot option
-]
+def _md(title, rows):
+    return MarkdownTable(1, title, rows, source="CSC")
 
 
 class TestArmorOptions(unittest.TestCase):
-    def test_parses_tl_name_slots(self):
-        opts = options_from_rows(_OPT_TABLE)
-        self.assertEqual([(o.name, o.tl, o.slots) for o in opts], [
-            ("Integral pistol", "10", 1),
-            ("Integral long arm", "10", 2),
-            ("Integral heavy weapon", "10", 10),
-            ("Automatic first aid", "10", 0),   # "—" → zero slots
+    def test_parses_slot_headed_table(self):
+        t = _md("Integrated Weapon Mount", [
+            ["Modification", "TL", "Effect", "Slots", "Cost"],
+            ["Weapon Mount (pistol)", "10", "Integral pistol", "1", "Cr500"],
+            ["Weapon Mount (rifle)", "10", "Integral long arm", "2", "Cr1,000"],
         ])
+        opts = armor_options_from_tables([t])
+        self.assertEqual([(o.name, o.slots, o.cost) for o in opts],
+                         [("Weapon Mount (pistol)", 1, 500), ("Weapon Mount (rifle)", 2, 1000)])
 
     def test_option_label(self):
-        self.assertEqual(ArmorOption("Sensors", "14", 2).label, "Sensors · TL14 · 2 slots")
-        self.assertEqual(ArmorOption("Pistol", "10", 1).label, "Pistol · TL10 · 1 slot")
+        self.assertEqual(ArmorOption("Weapon Mount", "10", 1, 500).label,
+                         "Weapon Mount · 1 slot · Cr500")
+        self.assertEqual(ArmorOption("Anti-Missile", "13", 3, 75000).label,
+                         "Anti-Missile · 3 slots · Cr75,000")
 
-    def test_rejects_a_non_option_table(self):
-        self.assertEqual(options_from_rows([["Weapon", "Damage", "Bulk"],
-                                            ["Sword", "1d8", "1"]]), [])
+    def test_ignores_kg_headed_table(self):
+        t = _md("Tactical Suite", [["Modification", "TL", "Effect", "Kg"],
+                                    ["Life support", "8", "6h", "10"]])
+        self.assertEqual(armor_options_from_tables([t]), [])
 
-    def test_rejects_table_with_implausible_slot_values(self):
-        # A cost/price column (Cr…) in slot position isn't a slot count.
-        self.assertEqual(options_from_rows([["10", "Ballistic Vest", "Cr500"],
-                                            ["12", "Ceramic", "Cr12000"]]), [])
+    def test_ignores_the_suit_catalogue(self):
+        # The powered-armour master table has a Slots column (capacity) but is not options.
+        t = _md("Powered Armour", [["Armour Type", "Protection", "Slots", "Cost"],
+                                   ["Battle Dress", "+22", "16", "Cr200000"]])
+        self.assertEqual(armor_options_from_tables([t]), [])
 
 
 class TestArmorFlow(unittest.TestCase):
@@ -278,6 +286,16 @@ class TestArmorFlow(unittest.TestCase):
         s.resolve("__done__")                            # finish
         self.assertTrue(s.complete)
         self.assertEqual(s.draft.options, ["Integral pistol", "Sensors"])
+
+    def test_installed_option_is_not_offered_again(self):
+        opts = [ArmorOption("Weapon Mount (pistol)", "10", 1, 500),
+                ArmorOption("Anti-Missile", "13", 3, 75000)]
+        s = self._session(suits=self._one_suit(), options=opts)
+        s.resolve("Battle Dress")
+        s.resolve("Weapon Mount (pistol)|10|1")           # install it
+        values = {o.value for o in s.current.options}
+        self.assertNotIn("Weapon Mount (pistol)|10|1", values)   # not offered a second time
+        self.assertIn("Anti-Missile|13|3", values)
 
     def test_back_removes_the_last_option(self):
         opts = [ArmorOption("Integral pistol", "10", 1), ArmorOption("Sensors", "14", 2)]

@@ -140,36 +140,39 @@ def suits_from_rows(rows: list[list[str]], *, grade_split=None) -> list[ArmorSui
 
 # --- installable slot options ----------------------------------------------------
 
-# An armour OPTION table (CSC "Armour" chapter) is 3 columns — TL · effect/name ·
-# slot cost — with the identifying title lost to a leaked caption ("Effect"/"TL"). We
-# recover the options by shape: a TL in the low range, some describing text, and a slot
-# cost that's a small integer or "—" (a zero-slot option). The effect text is the
-# option's name (its category title didn't survive extraction).
-_TL_MAX = 20
+# The genuine battle-dress slot options are the CSC tables with a real "Slots" column
+# (Modification · TL · Effect · Slots · Cost — weapon mounts, anti-missile, armour
+# modifications). These come from the markdown harvester (find_tables delabels them, and
+# — worse — the 3-column tables it does keep put KG in the last column, which is weight,
+# not slots). We only take Slots-headed, non-suit-catalogue tables, so a weight (kg)
+# accessory is never mistaken for a slot cost.
 _SLOT_MAX = 40
 
 
-def _is_tl(cell: str) -> bool:
-    c = (cell or "").strip()
-    return c.isdigit() and 1 <= int(c) <= _TL_MAX
+def _int_cell(cell: str) -> int | None:
+    m = re.search(r"-?\d+", (cell or "").replace(",", ""))
+    return int(m.group()) if m else None
 
 
-def _slot_cost(cell: str) -> int | None:
-    """Slot cost of an option cell: a small integer, or 0 for ``—`` (zero-slot). None if
-    it isn't a plausible slot value (so a non-option table is rejected)."""
-    c = (cell or "").strip()
-    if c in ("—", "-", ""):
-        return 0
-    return int(c) if c.isdigit() and int(c) <= _SLOT_MAX else None
+def _armor_credits(cost: str) -> int:
+    c = (cost or "").strip().replace(",", "")
+    m = re.search(r"MCr([\d.]+)", c, re.I)
+    if m:
+        return int(float(m.group(1)) * 1_000_000)
+    m = re.search(r"Cr([\d.]+)", c, re.I)
+    if m:
+        return int(float(m.group(1)))
+    return _int_cell(c) or 0
 
 
 @dataclass(frozen=True)
 class ArmorOption:
-    """One installable option: its name (the effect text), tech level, and slot cost."""
+    """One installable slot option: its name, tech level, slot cost, and credit cost."""
 
     name: str
     tl: str
     slots: int
+    cost: int = 0
 
     @property
     def key(self) -> str:
@@ -178,24 +181,48 @@ class ArmorOption:
     @property
     def label(self) -> str:
         unit = "slot" if self.slots == 1 else "slots"
-        tl = f"TL{self.tl} · " if self.tl else ""
-        return f"{self.name} · {tl}{self.slots} {unit}"
+        cr = f" · Cr{self.cost:,}" if self.cost else ""
+        return f"{self.name} · {self.slots} {unit}{cr}"
 
 
-def options_from_rows(rows: list[list[str]]) -> list[ArmorOption]:
-    """Parse a 3-column option table into :class:`ArmorOption`\\ s. Rejects a table whose
-    rows don't fit the TL · name · slot-cost shape (returns ``[]``)."""
+def _col(header: list[str], *needles: str) -> int | None:
+    ns = [n.lower() for n in needles]
+    for i, h in enumerate(header):
+        hl = (h or "").lower()
+        if all(n in hl for n in ns):
+            return i
+    return None
+
+
+def armor_options_from_tables(md_tables) -> list[ArmorOption]:
+    """Collect battle-dress slot options from harvested markdown tables. A table qualifies
+    when it has a real ``Slots`` column and is NOT a suit catalogue (no Armour Type /
+    Protection column). Name is the first column; slot cost and price come from their
+    named columns."""
     out: list[ArmorOption] = []
-    three = [r for r in rows if len(r) == 3]
-    if len(three) < 2:
-        return []
-    for r in three:
-        tl, name, slot = (r[0] or "").strip(), (r[1] or "").strip(), r[2]
-        cost = _slot_cost(slot)
-        if _is_tl(tl) and name and cost is not None:
-            out.append(ArmorOption(name=name, tl=tl, slots=cost))
-    # Require the table to be *mostly* option rows, else it isn't an option table.
-    return out if len(out) >= 2 and len(out) >= 0.6 * len(three) else []
+    seen: set[str] = set()
+    for t in md_tables:
+        rows = getattr(t, "rows", None) or []
+        if len(rows) < 2:
+            continue
+        header = rows[0]
+        si = _col(header, "slot")
+        if si is None or _col(header, "armour type") is not None or _col(header, "protection") is not None:
+            continue
+        ci = _col(header, "cost")
+        ti = _col(header, "tl")
+        for r in rows[1:]:
+            name = (r[0] or "").strip()
+            slots = _int_cell(r[si]) if si < len(r) else None
+            if not name or not any(c.isalpha() for c in name) or slots is None or slots > _SLOT_MAX:
+                continue
+            tl = str(_int_cell(r[ti]) or "") if ti is not None and ti < len(r) else ""
+            cost = _armor_credits(r[ci]) if ci is not None and ci < len(r) else 0
+            opt = ArmorOption(name=name, tl=tl, slots=slots, cost=cost)
+            if opt.key not in seen:
+                seen.add(opt.key)
+                out.append(opt)
+    return out
 
 
 # --- the builder: catalogue snapshot + interactive flow --------------------------
@@ -221,41 +248,31 @@ class ArmorData:
 
 
 def build_armor_data(rules, game: str) -> ArmorData:
-    """Snapshot the powered-armour catalogue from the live index. Finds the one table
-    carrying the STR/DEX/SLOTS powered-armour columns (the CSC master table) among the
-    game's chunks, and parses it into suits. The chunk's rows are already grade-split at
-    index time (``profile.normalize_rows``), so re-applying the grade-split here is a
-    harmless no-op that also covers a hypothetical un-normalised source."""
+    """Snapshot the powered-armour catalogue from the live index. Suits come from the
+    STR/DEX/SLOTS master table among the game's chunks (grade-split at index time).
+    Slot OPTIONS come from the harvested markdown tables that have a real ``Slots``
+    column — the correct source (find_tables delabels them and puts kg, not slots, in the
+    last column of the 3-column tables it does keep)."""
     from .. import pdf_tables, sources  # noqa: F401 — pdf_tables registers the profile
 
     prof = sources.profile_for(game)
     gs = prof.grade_split if prof else None
     suits: list[ArmorSuit] = []
     source = ""
-    options: list[ArmorOption] = []
-    seen_opt: set[str] = set()
     for c in getattr(rules.index, "chunks", []):
         if getattr(c, "game", None) != game:
             continue
         rows = getattr(c, "rows", None) or []
-        if not rows:
-            continue
         cells = {(x or "").strip().upper() for r in rows for x in r}
-        if not suits and {"STR", "DEX", "SLOTS"} <= cells and (
-            "ARMOUR TYPE" in cells or "PROTECTION" in cells
-        ):
+        if {"STR", "DEX", "SLOTS"} <= cells and ("ARMOUR TYPE" in cells or "PROTECTION" in cells):
             parsed = suits_from_rows(rows, grade_split=gs)
             if parsed:
                 suits = parsed
                 loc = getattr(c, "locator", "")
                 source = f"{getattr(c, 'source', '')}{' · ' + loc if loc else ''}".strip(" ·")
-            continue
-        # Installable options live in the Armour chapter (not Augments = cybernetics).
-        if (getattr(c, "section", "") or "").split(" › ", 1)[0].strip() == "Armour":
-            for opt in options_from_rows(rows):
-                if opt.key not in seen_opt:
-                    seen_opt.add(opt.key)
-                    options.append(opt)
+                break
+    md_tables = getattr(rules, "markdown_tables", {}).get(game, [])
+    options = armor_options_from_tables(md_tables)
     options.sort(key=lambda o: (o.slots, o.name))
     return ArmorData(game=game, suits=suits, options=options, source=source)
 
@@ -328,15 +345,18 @@ _DONE = "__done__"
 
 
 def _options_loop(ctx, options: list[ArmorOption]):
-    """Add options one at a time until the user finishes or the slot budget is full.
-    Each add is its own step, so the engine's Back removes the last option (replay)."""
+    """Add options one at a time until the user finishes or the slot budget is full. Each
+    add is its own step, so the engine's Back removes the last option (replay). An option
+    already installed — or another variant of the same-named one — is dropped from the
+    pick-list (you don't fit the same upgrade twice)."""
     draft = ctx.draft
     i = 0
     while True:
         free = draft.slots_free
-        addable = [o for o in options if o.slots <= free]
+        installed = set(draft.options)
+        addable = [o for o in options if o.slots <= free and o.name not in installed]
         if not addable:
-            draft.log.append("Slot budget full.")
+            draft.log.append("No more options fit." if free else "Slot budget full.")
             return
         shown = addable[:24]  # leave a slot for Finish within the 25-option Select cap
         detail = f"{free} of {draft.slots_total} slots free"

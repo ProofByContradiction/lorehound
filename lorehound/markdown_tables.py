@@ -25,7 +25,8 @@ _SEP_CELL = re.compile(r":?-{2,}:?")
 
 
 def _clean(cell: str) -> str:
-    """Strip markdown emphasis and collapse whitespace within a cell."""
+    """Strip markdown emphasis and inline ``<br>`` breaks, and collapse whitespace."""
+    cell = re.sub(r"<br\s*/?>", " ", cell)
     return re.sub(r"\s+", " ", cell.replace("*", "").replace("`", "")).strip()
 
 
