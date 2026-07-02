@@ -29,6 +29,13 @@ class SystemBuilder:
     # start, so an in-flight build stays consistent even if the index is rebuilt mid-flow.
     # Returns the object passed as the flow context's ``data``. None → needs no data.
     build_data: Callable[[object, str], object] | None = None
+    # Render the finished build's card and the running step summary from the draft — each
+    # buildable has its own (a suit vs. a ship), so the cog stays generic.
+    render_sheet: Callable[[object], str] | None = None
+    render_summary: Callable[[object], str] | None = None
+    # Make a fresh draft for the flow (given the game name). Each buildable has its own
+    # draft type (SuitBuild, ShipBuild); the engine only needs it to have log/complete.
+    make_draft: Callable[[str], object] | None = None
 
     def matches(self, game: str) -> bool:
         g = (game or "").lower()

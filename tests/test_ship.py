@@ -6,12 +6,15 @@ construction maths against grounded Mongoose 2022 High Guard values.
 
 import unittest
 
+from lorehound.builders.model import ShipBuild
 from lorehound.builders.ship import (
+    Computer,
     DriveStep,
     HullConfig,
     PowerPlant,
     ShipData,
     _mcr,
+    build_ship_data,
     compute_ship,
     j_drive_tons,
     m_drive_tons,
@@ -21,7 +24,9 @@ from lorehound.builders.ship import (
     parse_thrust,
     power_required,
     ship_data_from_tables,
+    ship_flow,
 )
+from lorehound.chargen.engine import FAITHFUL, ChargenSession
 from lorehound.markdown_tables import MarkdownTable
 
 
@@ -146,6 +151,69 @@ class TestShipDataAssembly(unittest.TestCase):
         self.assertTrue(data.ok)
         self.assertIn(2, data.thrust)
         self.assertIn(2, data.jump)
+
+
+class TestBuildShipData(unittest.TestCase):
+    def test_from_rules_markdown_tables(self):
+        def mt(title, rows):
+            return MarkdownTable(1, title, rows, source="HG")
+        mts = [
+            mt("Hull Configuration", [["Hull Configuration", "Hull Cost"],
+                                      ["Standard", "—"], ["Streamlined", "+20%"]]),
+            mt("Thrust Potential", [["Manoeuvre Drive Rating", "1", "2"],
+                                    ["% of Hull", "1%", "2%"], ["Manoeuvre TL", "9", "10"]]),
+            mt("Jump Potential", [["Rating", "1", "2"],
+                                  ["% of Hull + 5 tons", "2.5%", "5%"], ["Jump TL", "9", "11"]]),
+            mt("Power Plant Type", [["Power Plant Type", "Power per Ton", "Cost per Ton"],
+                                    ["Fusion (TL8)", "10", "MCr0.5"]]),
+        ]
+        rules = type("R", (), {"markdown_tables": {"Traveller": mts}})()
+        data = build_ship_data(rules, "Traveller")
+        self.assertTrue(data.ok)
+        self.assertEqual(data.source, "HG")
+
+
+class TestShipFlow(unittest.TestCase):
+    def _data(self):
+        return ShipData(
+            game="T", source="High Guard",
+            configs=[HullConfig("Standard", 0.0), HullConfig("Streamlined", 0.20)],
+            thrust={2: DriveStep(2, 0.02, 10)}, jump={2: DriveStep(2, 0.05, 11)},
+            power_plants=[PowerPlant("Fusion (TL8)", 10.0, 0.5)],
+            bridges=[(200, 10)], computers=[Computer("Computer/5", 7, 0.03)], sensors=[],
+        )
+
+    def _session(self):
+        data = self._data()
+        return ChargenSession(ship_flow, mode=FAITHFUL, draft=ShipBuild(game="T"),
+                              data=data, draft_factory=lambda: ShipBuild(game="T"))
+
+    def test_flow_walks_steps_and_computes(self):
+        s = self._session()
+        for step_id, value in [("hull", "200"), ("config", "Streamlined"), ("thrust", "2"),
+                               ("jump", "2"), ("power", "Fusion (TL8)"), ("computer", "Computer/5")]:
+            self.assertEqual(s.current.id, step_id)
+            s.resolve(value)
+        self.assertTrue(s.complete)                 # no sensors in catalogue → flow ends
+        d = s.draft
+        self.assertEqual((d.hull_tons, d.config, d.thrust, d.jump), (200, "Streamlined", 2, 2))
+        self.assertEqual(d.tonnage_used, 41)
+        self.assertAlmostEqual(d.total_cost, 49.53)
+        self.assertEqual(d.source, "High Guard")
+
+    def test_back_returns_to_previous_step(self):
+        s = self._session()
+        s.resolve("200")
+        self.assertEqual(s.current.id, "config")
+        self.assertTrue(s.can_back)
+        s.back()
+        self.assertEqual(s.current.id, "hull")
+
+    def test_empty_catalogue_completes_without_a_ship(self):
+        s = ChargenSession(ship_flow, mode=FAITHFUL, draft=ShipBuild(game="T"),
+                           data=ShipData(game="T"), draft_factory=lambda: ShipBuild(game="T"))
+        self.assertTrue(s.complete)
+        self.assertEqual(s.draft.hull_tons, 0)
 
 
 if __name__ == "__main__":

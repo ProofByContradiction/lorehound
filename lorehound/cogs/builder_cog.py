@@ -12,13 +12,14 @@ session start so an in-flight build stays consistent across a re-index.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 from .. import ui
-from ..builders import registry, render
-from ..builders.model import SuitBuild
+from ..builders import registry
 from ..chargen.engine import FAITHFUL, ChargenSession
 from ..chargen.model import Step
 from .rules_cog import _share_card  # reuse the channel-share helper
@@ -129,7 +130,7 @@ class BuilderView(discord.ui.LayoutView):
     def _build_step(self, container: discord.ui.Container) -> None:
         step = self.session.current
         assert step is not None
-        summary = render.build_summary(self.session.draft)
+        summary = self.system.render_summary(self.session.draft) if self.system.render_summary else ""
         if summary:
             container.add_item(ui.text(summary))
             container.add_item(ui.separator())
@@ -148,7 +149,7 @@ class BuilderView(discord.ui.LayoutView):
             container.add_item(back_row)
 
     def _build_sheet(self, container: discord.ui.Container) -> None:
-        container.add_item(ui.text(render.built_suit_sheet(self.session.draft)))
+        container.add_item(ui.text(self.system.render_sheet(self.session.draft)))
         container.add_item(ui.separator())
         row = discord.ui.ActionRow()
         row.add_item(_Btn(self._restart, "Start over", emoji="🔄"))
@@ -172,10 +173,10 @@ class BuilderView(discord.ui.LayoutView):
 
     async def _share(self, interaction: discord.Interaction) -> None:
         card = ui.card(
-            ui.header(f"# 🛡️ {self.game} build",
+            ui.header(f"# {self.system.emoji} {self.game} build",
                       icon_url=interaction.user.display_avatar.url),
             ui.separator(),
-            ui.text(render.built_suit_sheet(self.session.draft)),
+            ui.text(self.system.render_sheet(self.session.draft)),
             accent=ACCENT,
         )
         await _share_card(interaction, card)
@@ -192,13 +193,24 @@ def _new_session(bot, system: registry.SystemBuilder, game: str) -> ChargenSessi
     """Start a build: snapshot the component catalogue from the live index NOW, then
     drive the always-interactive flow from that stable snapshot."""
     data = system.build_data(bot.rules_service, game) if system.build_data else None
+    make = system.make_draft or (lambda g: _FallbackDraft(game=g))
     return ChargenSession(
         system.build_flow,
         mode=FAITHFUL,
-        draft=SuitBuild(game=game),
+        draft=make(game),
         data=data,
-        draft_factory=lambda: SuitBuild(game=game),
+        draft_factory=lambda: make(game),
     )
+
+
+@dataclass
+class _FallbackDraft:
+    """Minimal draft for a builder that registered no ``make_draft`` (the engine only
+    needs ``game``/``log``/``complete``)."""
+
+    game: str
+    log: list = field(default_factory=list)
+    complete: bool = False
 
 
 async def _game_autocomplete(

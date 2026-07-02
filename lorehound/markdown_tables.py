@@ -66,6 +66,7 @@ class MarkdownTable:
     page: int
     title: str
     rows: list[list[str]] = field(default_factory=list)  # [header, *data]
+    source: str = ""     # book the table came from (set by the caller)
 
     @property
     def header(self) -> list[str]:

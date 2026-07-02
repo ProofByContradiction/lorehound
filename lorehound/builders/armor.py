@@ -20,7 +20,6 @@ import re
 from dataclasses import dataclass, field
 
 from ..chargen.model import Option, Step, StepKind
-from .registry import SystemBuilder, register
 
 # Columns pulled out of the master armour table, matched by header NAME (order in the
 # printed table varies, so never rely on a fixed index). SLOTS is the slot budget.
@@ -363,12 +362,22 @@ def _options_loop(ctx, options: list[ArmorOption]):
         i += 1
 
 
-register(SystemBuilder(
-    name="Traveller — powered armour / Battle Dress",
-    games=("traveller",),
-    kind="armour",
-    noun="powered-armour suit",
-    emoji="🛡️",
-    build_flow=armor_flow,
-    build_data=build_armor_data,
-))
+def _register() -> None:
+    from .model import SuitBuild
+    from .registry import SystemBuilder, register
+    from .render import build_summary, built_suit_sheet
+    register(SystemBuilder(
+        name="Traveller — powered armour / Battle Dress",
+        games=("traveller",),
+        kind="armour",
+        noun="powered-armour suit",
+        emoji="🛡️",
+        build_flow=armor_flow,
+        build_data=build_armor_data,
+        render_sheet=built_suit_sheet,
+        render_summary=build_summary,
+        make_draft=lambda game: SuitBuild(game=game),
+    ))
+
+
+_register()

@@ -5,7 +5,7 @@ unit-testable; the cog wraps it in a Components V2 card. Mirrors ``chargen.rende
 
 from __future__ import annotations
 
-from .model import SuitBuild
+from .model import ShipBuild, SuitBuild
 
 _ESC = "\x1b"
 
@@ -50,6 +50,38 @@ def built_suit_sheet(draft: SuitBuild) -> str:
     lines.append(_stat_block(draft))
     if draft.options:
         lines.append("**Installed** — " + ", ".join(draft.options))
+    if draft.source:
+        lines.append(f"-# Source: {draft.source}")
+    return "\n".join(lines)
+
+
+# --- ship builder ---------------------------------------------------------------
+
+def ship_summary(draft: ShipBuild) -> str:
+    """Running line above the current ship-build step."""
+    if not draft.hull_tons:
+        return ""
+    parts = [f"**Hull** · {draft.hull_tons}t {draft.config}".rstrip()]
+    if draft.thrust:
+        parts.append(f"Thrust {draft.thrust}")
+    if draft.jump:
+        parts.append(f"Jump {draft.jump}")
+    return "  ·  ".join(parts)
+
+
+def built_ship_sheet(draft: ShipBuild) -> str:
+    """The finished starship build as Markdown: a per-component tonnage/cost breakdown
+    with the tonnage budget and total cost."""
+    lines = [f"## 🚀 {draft.display}", f"-# {draft.game} · starship build"]
+    block = [f"{label[:26]:<27}{tons:>5.0f}t   MCr {cost:>8.2f}" for label, tons, cost in draft.lines]
+    block.append("─" * 46)
+    tfree = draft.tonnage_free
+    block.append(f"{'Tonnage used':<27}{draft.tonnage_used:>5.0f}t   ({tfree:.0f}t free of {draft.hull_tons})")
+    block.append(f"{'Total cost':<27}{'':>6}   MCr {draft.total_cost:>8.2f}")
+    lines.append("```\n" + "\n".join(block) + "\n```")
+    if draft.warnings:
+        lines.append("⚠️ " + "; ".join(draft.warnings))
+    lines.append(f"-# {tfree:.0f}t remain for fuel, staterooms, weapons & cargo")
     if draft.source:
         lines.append(f"-# Source: {draft.source}")
     return "\n".join(lines)

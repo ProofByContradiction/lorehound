@@ -39,3 +39,35 @@ class SuitBuild:
     @property
     def display(self) -> str:
         return f"{self.base} ({self.grade})" if self.grade else (self.base or "Powered Armour")
+
+
+@dataclass
+class ShipBuild:
+    """A Traveller starship build in progress. The flow records the choices, then stores
+    the computed per-component breakdown as primitives (label, tons, cost) so the render
+    layer needs no ship-compute types."""
+
+    game: str
+    hull_tons: int = 0
+    config: str = ""
+    thrust: int = 0
+    jump: int = 0
+    power_plant: str = ""
+    computer: str = ""
+    sensor: str = ""
+    # computed breakdown, filled at the end of the flow
+    lines: list[tuple[str, float, float]] = field(default_factory=list)  # (label, tons, MCr)
+    tonnage_used: float = 0.0
+    total_cost: float = 0.0
+    source: str = ""
+    warnings: list[str] = field(default_factory=list)
+    log: list[str] = field(default_factory=list)
+    complete: bool = False
+
+    @property
+    def tonnage_free(self) -> float:
+        return max(0.0, self.hull_tons - self.tonnage_used)
+
+    @property
+    def display(self) -> str:
+        return f"{self.hull_tons}t {self.config}".strip() if self.hull_tons else "Starship"

@@ -352,3 +352,113 @@ def compute_ship(data: ShipData, *, hull_tons: int, config: str, thrust: int, ju
     if report.tonnage_used > hull_tons:
         warnings.append(f"over tonnage: {report.tonnage_used:.0f}t used of {hull_tons}t")
     return report
+
+
+# --- catalogue snapshot + interactive flow ---------------------------------------
+
+def build_ship_data(rules, game: str) -> ShipData:
+    """Snapshot the ship construction catalogue from the harvested markdown tables the
+    index built for this game (see RulesService.markdown_tables)."""
+    tables = getattr(rules, "markdown_tables", {}).get(game, [])
+    source = ""
+    for t in tables:
+        if "thrust potential" in t.title.lower() or "hull configuration" in t.title.lower():
+            source = getattr(t, "source", "")
+            break
+    return ship_data_from_tables(tables, game, source)
+
+
+# Standard hull tonnages to offer (High Guard allows any size; these cover the common
+# adventure-class range without an open-ended prompt).
+_HULL_SIZES = [100, 200, 300, 400, 600, 800, 1000, 2000]
+_NONE = "__none__"
+
+
+def _mod_label(m: float) -> str:
+    return "" if not m else f" ({'+' if m > 0 else ''}{int(m * 100)}% cost)"
+
+
+def ship_flow(ctx):
+    """Core-MVP ship flow: hull tonnage → configuration → Thrust → Jump → power plant →
+    computer → sensors, then compute the tonnage/cost breakdown onto the draft."""
+    from ..chargen.model import Option, Step, StepKind
+
+    data: ShipData | None = ctx.data
+    draft = ctx.draft
+    if data is None or not data.ok:
+        draft.log.append("No ship construction catalogue is indexed for this game.")
+        return
+
+    def choose(step_id, prompt, options, detail=""):
+        return (yield Step(id=step_id, kind=StepKind.CHOICE, essential=True,
+                           prompt=prompt, detail=detail, options=options[:25]))
+
+    pick = yield from choose("hull", "Choose a hull tonnage",
+                             [Option(str(s), f"{s} tons") for s in _HULL_SIZES])
+    draft.hull_tons = int(pick.value)
+
+    pick = yield from choose("config", "Hull configuration",
+                             [Option(c.name, f"{c.name}{_mod_label(c.cost_modifier)}") for c in data.configs])
+    draft.config = pick.value
+
+    tratings = sorted(r for r in data.thrust if 1 <= r <= 9)
+    pick = yield from choose("thrust", "Manoeuvre drive (Thrust)", [
+        Option(str(r), f"Thrust {r} · {data.thrust[r].percent_hull * 100:g}% of hull · TL{data.thrust[r].tl}")
+        for r in tratings])
+    draft.thrust = int(pick.value)
+
+    jratings = sorted(r for r in data.jump if 1 <= r <= 9)
+    pick = yield from choose("jump", "Jump drive (Jump)", [
+        Option(str(r), f"Jump {r} · {data.jump[r].percent_hull * 100:g}% of hull · TL{data.jump[r].tl}")
+        for r in jratings])
+    draft.jump = int(pick.value)
+
+    pick = yield from choose("power", "Power plant", [
+        Option(p.name, f"{p.name} · {p.power_per_ton:g} Power/ton · MCr{p.cost_per_ton:g}/ton")
+        for p in data.power_plants],
+        detail=f"needs {power_required(draft.hull_tons, draft.thrust, draft.jump):.0f} Power")
+    draft.power_plant = pick.value
+
+    if data.computers:
+        pick = yield from choose("computer", "Computer (optional)",
+                                 [Option(_NONE, "— none —")]
+                                 + [Option(c.name, f"{c.name} · TL{c.tl} · MCr{c.cost:g}") for c in data.computers])
+        draft.computer = "" if pick.value == _NONE else pick.value
+
+    if data.sensors:
+        pick = yield from choose("sensor", "Sensors (optional)",
+                                 [Option(_NONE, "— none —")]
+                                 + [Option(s.name, f"{s.name} · TL{s.tl} · {s.tons:g}t · MCr{s.cost:g}")
+                                    for s in data.sensors])
+        draft.sensor = "" if pick.value == _NONE else pick.value
+
+    report = compute_ship(data, hull_tons=draft.hull_tons, config=draft.config,
+                          thrust=draft.thrust, jump=draft.jump, power_plant=draft.power_plant,
+                          computer=draft.computer, sensor=draft.sensor)
+    draft.lines = [(line.label, line.tons, line.cost) for line in report.lines]
+    draft.tonnage_used = report.tonnage_used
+    draft.total_cost = report.total_cost
+    draft.warnings = report.warnings
+    draft.source = data.source
+    draft.log.append(f"Built {draft.hull_tons}t {draft.config} ship, {draft.tonnage_used:.0f}t used")
+
+
+def _register() -> None:
+    from .model import ShipBuild
+    from .registry import SystemBuilder, register
+    from .render import built_ship_sheet, ship_summary
+    register(SystemBuilder(
+        name="Traveller — starship (High Guard)",
+        games=("traveller",),
+        kind="ship",
+        noun="starship",
+        emoji="🚀",
+        build_flow=ship_flow,
+        build_data=build_ship_data,
+        render_sheet=built_ship_sheet,
+        render_summary=ship_summary,
+        make_draft=lambda game: ShipBuild(game=game),
+    ))
+
+
+_register()

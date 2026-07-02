@@ -706,6 +706,11 @@ class RulesService:
         # Per-game chargen aux data parsed from document prose at index time (e.g.
         # the T2K childhood table), for flows that need tables find_tables can't see.
         self.chargen_aux: dict[str, dict] = {}
+        # Per-game labelled pipe-tables harvested from each doc's markdown. find_tables
+        # delabels many multi-column tables (High Guard's construction tables become
+        # bare number grids); the markdown keeps them labelled. Builders read these
+        # (e.g. the ship builder's construction catalogue). See lorehound.markdown_tables.
+        self.markdown_tables: dict[str, list] = {}
         # True while refresh() is rebuilding the index (cold-start warm or /reindex).
         # The prior index stays live and queryable throughout; this only lets the UI
         # warn that data may change shortly and gate flows (chargen) that want a
@@ -746,19 +751,29 @@ class RulesService:
             raise ReindexInProgress("A reindex is already in progress.")
         self._indexing = True
         try:
+            from .markdown_tables import harvest_tables
+
             docs = self.drive.fetch_all(force=force)
             chunks: list[Chunk] = []
             stat_box_chunks: list[Chunk] = []  # spell/feat/hazard/… boxes → name cards
             aux: dict[str, dict] = {}
+            md_tables: dict[str, list] = {}
             for doc in docs:
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
                 chunks.extend(_tables_for_doc(doc.name, doc.tables))
                 boxes = _stat_box_chunks_for_doc(doc.name, doc.text)
                 chunks.extend(boxes)
                 stat_box_chunks.extend(boxes)
+                game, book = _split_game_and_file(doc.name)
+                # Harvest labelled markdown pipe-tables (builders read these where
+                # find_tables delabels — e.g. High Guard ship construction).
+                harvested = harvest_tables(doc.text)
+                for mt in harvested:
+                    mt.source = book
+                if harvested:
+                    md_tables.setdefault(game, []).extend(harvested)
                 # Parse any prose-only chargen tables (e.g. T2K childhood) for games
                 # with a chargen system, so the flow can read them from the index.
-                game, _book = _split_game_and_file(doc.name)
                 system = chargen_for(game)
                 if system is not None and system.extract_prose is not None:
                     parsed = system.extract_prose(doc.text, doc.tables)
@@ -784,6 +799,7 @@ class RulesService:
             self._catalog = catalog
             self._catalog_cards = catalog_cards
             self.chargen_aux = aux
+            self.markdown_tables = md_tables
             return {
                 "documents": len(docs),
                 "chunks": len(chunks),
