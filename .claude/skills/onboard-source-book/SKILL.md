@@ -170,15 +170,16 @@ parser/render/index-time changes are restart-only.
   (`_accepted_kinds`); recovered ~39 previously-dropped PF entries (item/hazard/rune/
   snare), then surfaced them (`_build_stat_cards` generic, `CATEGORIES` badges,
   `/hazard` command).
-- **Vehicle stat-block detection (IN PROGRESS)** — near-miss analysis of the cache
-  showed `is_ship_statblock` misses Traveller **vehicle** blocks: their col0 signature
-  is `[tl, skill, agility, speed (cruise), range (cruise), crew, passengers, cargo,
-  hull, shipping, cost]` (≈32 tables), only 2 *ship-component* words so below the
-  `hits ≥ max(3, n//2)` threshold. The fix is a structural `is_vehicle_statblock`
-  keyed on ≥3 distinctive vehicle-stat labels (agility + speed/range(cruise) +
-  passengers/shipping are near-unique to vehicle blocks) — validate against the whole
-  corpus so robot chassis blocks and proficiency/rules tables (the false-positive
-  risks that also carry a stray "armour"/"weapon") don't get caught.
+- **Vehicle stat-block detection (DONE — `tables.is_vehicle_statblock`)** — the model
+  case for "structural, not chapter". Near-miss analysis of the cache showed
+  `is_ship_statblock` missed Traveller **vehicle** blocks: their col0 is `[tl, skill,
+  agility, speed (cruise), range (cruise), crew, passengers, cargo, hull, shipping,
+  cost]` (≈32 tables), only 2 *ship-component* words so below `hits ≥ max(3, n//2)`.
+  Fixed with a sibling detector keyed on the vehicle vocabulary + a ≥2-distinctive-
+  marker gate (agility / speed·range(cruise) / passengers / shipping are near-unique
+  to vehicles), so robot chassis and rules tables with a stray "armour"/"weapon" row
+  stay out. Corpus-validated: 32 tables `rules→transport`, nothing else moved, 0
+  non-vehicle false positives, catches shattered fragments too.
 
 Cross-refs in memory: `[[lorehound-chargen-generic-vision]]`,
 `[[lorehound-extraction-roadmap]]`, `[[lorehound-open-work]]`,
