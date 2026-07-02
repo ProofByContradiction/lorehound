@@ -10,7 +10,16 @@ copyrighted book isn't in the repo), so it's opt-in via ``LOREHOUND_GOLD_EVAL=1`
 import os
 import unittest
 
-from lorehound.builders.armor import ArmorSuit, suits_from_rows
+from lorehound.builders.armor import (
+    ArmorData,
+    ArmorSuit,
+    armor_flow,
+    build_armor_data,
+    suits_from_rows,
+)
+from lorehound.builders.model import SuitBuild
+from lorehound.builders.render import build_summary, built_suit_sheet
+from lorehound.chargen.engine import FAITHFUL, ChargenSession
 from lorehound.sources import GradeSplit
 
 # The Traveller profile's real grade-split config (detect PROTECTION+TL, count on TL).
@@ -111,6 +120,107 @@ class TestArmorLiveCache(unittest.TestCase):
         self.assertTrue(all(s.slots > 0 and s.cost and s.protection for s in suits))
         bd = [s for s in suits if s.name == "Battle Dress"]
         self.assertEqual({s.grade for s in bd}, {"Basic", "Improved", "Advanced"})
+
+
+_SUITS = [
+    ArmorSuit("Battle Dress", "Basic", "+22", "13", "+4", "+4", 16, "Cr200000"),
+    ArmorSuit("Battle Dress", "Advanced", "+28", "15", "+6", "+4", 18, "Cr440000"),
+    ArmorSuit("Scout Battle Dress", "", "+20", "13", "+2", "+6", 12, "Cr270000"),
+]
+
+
+class TestArmorData(unittest.TestCase):
+    def test_families_are_unique_in_order(self):
+        data = ArmorData(game="T", suits=_SUITS)
+        self.assertEqual(data.families, ["Battle Dress", "Scout Battle Dress"])
+
+    def test_grades_of_a_family(self):
+        data = ArmorData(game="T", suits=_SUITS)
+        self.assertEqual([s.grade for s in data.grades_of("Battle Dress")], ["Basic", "Advanced"])
+
+    def test_build_data_finds_the_powered_armour_table(self):
+        from lorehound import pdf_tables  # noqa: F401 — registers the Traveller profile
+
+        class _Chunk:
+            def __init__(self, game, rows):
+                self.game, self.rows, self.source, self.locator = game, rows, "CSC", "p. 40"
+
+        class _Rules:
+            def __init__(self, chunks):
+                self.index = type("Idx", (), {"chunks": chunks})()
+
+        rules = _Rules([_Chunk("Traveller (Mongoose)", [_HEADER, _PLAIN])])
+        data = build_armor_data(rules, "Traveller (Mongoose)")
+        self.assertEqual(len(data.suits), 3)                       # 3 grades from one crammed row
+        self.assertEqual(data.families, ["Battle Dress"])
+        self.assertEqual(data.source, "CSC · p. 40")
+
+    def test_build_data_ignores_other_games(self):
+        from lorehound import pdf_tables  # noqa: F401
+
+        class _Chunk:
+            def __init__(self, game, rows):
+                self.game, self.rows, self.source, self.locator = game, rows, "CSC", "p. 40"
+
+        rules = type("R", (), {"index": type("Idx", (), {
+            "chunks": [_Chunk("Some Other Game", [_HEADER, _PLAIN])]})()})()
+        self.assertEqual(build_armor_data(rules, "Traveller (Mongoose)").suits, [])
+
+
+class TestArmorFlow(unittest.TestCase):
+    def _session(self, suits=_SUITS):
+        data = ArmorData(game="T", suits=suits, source="CSC · p. 40")
+        return ChargenSession(armor_flow, mode=FAITHFUL, draft=SuitBuild(game="T"),
+                              data=data, draft_factory=lambda: SuitBuild(game="T"))
+
+    def test_pick_family_then_grade_completes_the_build(self):
+        s = self._session()
+        self.assertEqual(s.current.id, "family")
+        s.resolve("Battle Dress")
+        self.assertEqual(s.current.id, "grade")
+        s.resolve("Advanced")
+        self.assertTrue(s.complete)
+        d = s.draft
+        self.assertEqual(
+            (d.base, d.grade, d.protection, d.slots_total, d.cost),
+            ("Battle Dress", "Advanced", "+28", 18, "Cr440000"),
+        )
+
+    def test_single_grade_family_skips_the_grade_step(self):
+        s = self._session()
+        s.resolve("Scout Battle Dress")            # only one grade → flow finishes
+        self.assertTrue(s.complete)
+        self.assertEqual((s.draft.base, s.draft.slots_total), ("Scout Battle Dress", 12))
+
+    def test_back_returns_to_the_family_step(self):
+        s = self._session()
+        s.resolve("Battle Dress")
+        self.assertTrue(s.can_back)
+        s.back()
+        self.assertEqual(s.current.id, "family")   # rebuilt onto a fresh SuitBuild draft
+
+    def test_empty_catalogue_completes_without_a_suit(self):
+        s = ChargenSession(armor_flow, mode=FAITHFUL, draft=SuitBuild(game="T"),
+                           data=ArmorData(game="T", suits=[]),
+                           draft_factory=lambda: SuitBuild(game="T"))
+        self.assertTrue(s.complete)
+        self.assertEqual(s.draft.base, "")
+
+
+class TestBuiltSuitRender(unittest.TestCase):
+    def _built(self):
+        return SuitBuild(game="Traveller", base="Battle Dress", grade="Advanced",
+                         protection="+28", str_mod="+6", dex_mod="+4", tl="15",
+                         cost="Cr440000", slots_total=18, source="CSC · p. 40")
+
+    def test_sheet_shows_headline_stats_and_slot_budget(self):
+        out = built_suit_sheet(self._built())
+        for token in ("Battle Dress (Advanced)", "+28", "0 / 18", "18 free", "Cr440000", "CSC · p. 40"):
+            self.assertIn(token, out)
+
+    def test_summary_empty_until_a_base_is_chosen(self):
+        self.assertEqual(build_summary(SuitBuild(game="T")), "")
+        self.assertIn("Battle Dress", build_summary(self._built()))
 
 
 if __name__ == "__main__":

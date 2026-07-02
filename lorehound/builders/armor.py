@@ -17,7 +17,10 @@ merged cell — assigning each family row the protection group at its own positi
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from ..chargen.model import Option, Step, StepKind
+from .registry import SystemBuilder, register
 
 # Columns pulled out of the master armour table, matched by header NAME (order in the
 # printed table varies, so never rely on a fixed index). SLOTS is the slot budget.
@@ -134,3 +137,118 @@ def suits_from_rows(rows: list[list[str]], *, grade_split=None) -> list[ArmorSui
             )
         i = j
     return suits
+
+
+# --- the builder: catalogue snapshot + interactive flow --------------------------
+
+
+@dataclass
+class ArmorData:
+    """The snapshot the flow drives: every buildable suit, grouped by family, plus a
+    provenance string. Built once at session start from the live index."""
+
+    game: str
+    suits: list[ArmorSuit] = field(default_factory=list)
+    source: str = ""
+
+    @property
+    def families(self) -> list[str]:
+        """Distinct family names in catalogue order (dedup preserving first-seen)."""
+        return list(dict.fromkeys(s.name for s in self.suits))
+
+    def grades_of(self, family: str) -> list[ArmorSuit]:
+        return [s for s in self.suits if s.name == family]
+
+
+def build_armor_data(rules, game: str) -> ArmorData:
+    """Snapshot the powered-armour catalogue from the live index. Finds the one table
+    carrying the STR/DEX/SLOTS powered-armour columns (the CSC master table) among the
+    game's chunks, and parses it into suits. The chunk's rows are already grade-split at
+    index time (``profile.normalize_rows``), so re-applying the grade-split here is a
+    harmless no-op that also covers a hypothetical un-normalised source."""
+    from .. import pdf_tables, sources  # noqa: F401 — pdf_tables registers the profile
+
+    prof = sources.profile_for(game)
+    gs = prof.grade_split if prof else None
+    for c in getattr(rules.index, "chunks", []):
+        if getattr(c, "game", None) != game:
+            continue
+        rows = getattr(c, "rows", None) or []
+        cells = {(x or "").strip().upper() for r in rows for x in r}
+        if {"STR", "DEX", "SLOTS"} <= cells and ("ARMOUR TYPE" in cells or "PROTECTION" in cells):
+            suits = suits_from_rows(rows, grade_split=gs)
+            if suits:
+                loc = getattr(c, "locator", "")
+                src = f"{getattr(c, 'source', '')}{' · ' + loc if loc else ''}".strip(" ·")
+                return ArmorData(game=game, suits=suits, source=src)
+    return ArmorData(game=game, suits=[])
+
+
+def _short_protection(protection: str) -> str:
+    """Drop a trailing vs-note for a compact pick-list label (the full value, note and
+    all, still lands on the finished card)."""
+    return protection.split(" (", 1)[0].strip()
+
+
+def _apply_suit(draft, suit: ArmorSuit, source: str) -> None:
+    draft.base = suit.name
+    draft.grade = suit.grade
+    draft.protection = suit.protection
+    draft.str_mod = suit.str_mod
+    draft.dex_mod = suit.dex_mod
+    draft.tl = suit.tl
+    draft.cost = suit.cost
+    draft.slots_total = suit.slots
+    draft.source = source
+    draft.log.append(f"Base suit: {suit.display} — {suit.slots} slots")
+
+
+def armor_flow(ctx):
+    """The base-suit MVP flow: choose a family, then a grade; the finished draft carries
+    the suit's stats and its slot budget. (Slot-consuming options are the fast-follow.)"""
+    data: ArmorData | None = ctx.data
+    draft = ctx.draft
+    if data is None or not data.suits:
+        draft.log.append("No powered-armour catalogue is indexed for this game.")
+        return
+
+    pick = yield Step(
+        id="family",
+        kind=StepKind.CHOICE,
+        essential=True,
+        prompt="Choose a base suit",
+        detail="Each Battle Dress family trades protection, characteristics and slot capacity.",
+        options=[Option(value=f, label=f) for f in data.families[:25]],
+    )
+    family = pick.value
+    draft.base = family  # so the grade step already shows the family taking shape
+    grades = data.grades_of(family)
+
+    if len(grades) > 1:
+        gpick = yield Step(
+            id="grade",
+            kind=StepKind.CHOICE,
+            essential=True,
+            prompt=f"Choose a grade of {family}",
+            options=[
+                Option(
+                    value=s.grade or family,
+                    label=f"{s.grade or 'Standard'} · PROT {_short_protection(s.protection)} "
+                          f"· {s.slots} slots · {s.cost}",
+                )
+                for s in grades
+            ],
+        )
+        suit = next((s for s in grades if (s.grade or family) == gpick.value), grades[0])
+    else:
+        suit = grades[0]
+
+    _apply_suit(draft, suit, data.source)
+
+
+register(SystemBuilder(
+    name="Traveller — powered armour / Battle Dress",
+    games=("traveller",),
+    build_flow=armor_flow,
+    build_data=build_armor_data,
+))

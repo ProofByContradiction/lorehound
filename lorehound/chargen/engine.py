@@ -61,6 +61,7 @@ class ChargenSession:
         data: object = None,
         roller: Callable[[str], RollResult] | None = None,
         rng: random.Random | None = None,
+        draft_factory: Callable[[], object] | None = None,
     ) -> None:
         if mode not in (QUICK, FAITHFUL):
             raise ValueError(f"mode must be {QUICK!r} or {FAITHFUL!r}, got {mode!r}")
@@ -69,6 +70,10 @@ class ChargenSession:
         self._flow_factory = flow_factory
         self._game = draft.game
         self._data = data
+        # How back() mints a fresh draft to replay onto. Defaults to a CharacterDraft;
+        # other flows (equipment builders) pass their own draft type — the engine only
+        # ever touches ``draft.log`` and ``draft.complete``, so any draft works.
+        self._draft_factory = draft_factory or (lambda: CharacterDraft(game=self._game))
         self._roller = roller or evaluate
         self._rng = rng or random.SystemRandom()
         self._replay: list[StepResult] = []   # recorded results to re-feed on back()
@@ -122,7 +127,7 @@ class ChargenSession:
             return self.current
         replay = self.history[:self._checkpoints[-2]]
         self.ctx = ChargenContext(
-            draft=CharacterDraft(game=self._game),
+            draft=self._draft_factory(),
             data=self._data, roll=self._roller, rng=self._rng,
         )
         self._gen = self._flow_factory(self.ctx)

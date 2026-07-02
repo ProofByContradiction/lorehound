@@ -6,7 +6,9 @@ suit filling its slot allowance, a starship massing systems into a hull. Same sp
 ``chargen`` — a system-agnostic engine drives a per-system flow that reads component
 DATA from the live index (no copyrighted tables in the repo; see the stays-free rule).
 
-Only the data layer lives here so far (``armor``); the flow/engine/cog follow the
-``chargen`` package's shape. Import each system module for its registration side effect
-as those land.
+The engine + step model are reused from ``chargen`` (they're system-agnostic); this
+package adds the builder registry, per-system component data + flows, and rendering.
+Each system module is imported here for its registration side effect.
 """
+
+from . import armor  # noqa: F401 — registers the Traveller armour builder
