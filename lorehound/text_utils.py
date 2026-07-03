@@ -47,6 +47,21 @@ def _known(word: str, words: frozenset[str]) -> bool:
 
 _LIG_TOKEN = re.compile(r"[A-Za-z]+")
 
+# Literal Unicode ligature codepoints → their ASCII letters. Distinct from
+# repair_ligatures (which restores an "fi"/"fl" a broken CMap collapsed to a bare "f"):
+# these are the *composed* glyphs (U+FB00–06) some PDFs keep verbatim. The search
+# tokenizer ([a-z0-9]+) can't see through them — "eﬀect" tokenizes to "e"+"ect", so a
+# search for "effect" misses it — so normalise them everywhere the text is indexed.
+_LIGATURE_MAP = str.maketrans({
+    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st",
+})
+
+
+def normalize_ligatures(text: str) -> str:
+    """Replace composed ligature glyphs (ﬀﬁﬂﬃﬄ…) with their ASCII letters, so the text
+    both displays cleanly and tokenises for search. Deterministic; safe to apply broadly."""
+    return text.translate(_LIGATURE_MAP)
+
 
 def repair_ligatures(text: str) -> str:
     """Repair ``fi``/``fl`` ligatures that a broken font CMap collapsed to a bare
