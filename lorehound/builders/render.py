@@ -81,7 +81,8 @@ def built_ship_sheet(draft: ShipBuild) -> str:
     lines.append("```\n" + "\n".join(block) + "\n```")
     if draft.warnings:
         lines.append("⚠️ " + "; ".join(draft.warnings))
-    lines.append(f"-# {tfree:.0f}t remain for fuel, staterooms, weapons & cargo")
+    if tfree > 0.5:
+        lines.append(f"-# {tfree:.0f}t unallocated")
     if draft.source:
         lines.append(f"-# Source: {draft.source}")
     return "\n".join(lines)

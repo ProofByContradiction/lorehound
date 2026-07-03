@@ -112,20 +112,26 @@ class TestComputeGrounded(unittest.TestCase):
 
     def test_full_ship_matches_grounded_numbers(self):
         r = compute_ship(self._data(), hull_tons=200, config="Streamlined",
-                         thrust=2, jump=2, power_plant="Fusion (TL8)")
-        by = {L.label.split(" —")[0].split(" (")[0].strip(): L for L in r.lines}
+                         thrust=2, jump=2, power_plant="Fusion (TL8)", staterooms=3)
+        by = {L.label.split(" —")[0].split(" ×")[0].split(" (")[0].strip(): L for L in r.lines}
         self.assertAlmostEqual(by["Hull"].cost, 12.0)          # 200 × Cr50k × 1.2
-        self.assertEqual(by["M-Drive"].tons, 4)
-        self.assertAlmostEqual(by["M-Drive"].cost, 8.0)        # 4 × MCr2
-        self.assertEqual(by["J-Drive"].tons, 15)
-        self.assertAlmostEqual(by["J-Drive"].cost, 22.5)       # 15 × MCr1.5
-        self.assertEqual(by["Power Plant"].tons, 12)           # 120 power / 10
-        self.assertAlmostEqual(by["Power Plant"].cost, 6.0)
-        self.assertEqual(by["Bridge"].tons, 10)
-        self.assertAlmostEqual(by["Bridge"].cost, 1.0)         # MCr0.5 × 200/100
-        self.assertEqual(r.tonnage_used, 41)                   # 4+15+12+10
-        self.assertEqual(r.tonnage_free, 159)
+        self.assertEqual((by["M-Drive"].tons, by["M-Drive"].cost), (4, 8.0))    # 2% of 200, ×MCr2
+        self.assertEqual((by["J-Drive"].tons, by["J-Drive"].cost), (15, 22.5))  # 5%+5, ×MCr1.5
+        self.assertEqual((by["Power Plant"].tons, by["Power Plant"].cost), (12, 6.0))  # 120/10
+        self.assertEqual((by["Bridge"].tons, by["Bridge"].cost), (10, 1.0))     # MCr0.5 × 200/100
+        self.assertEqual(by["Fuel"].tons, 42)                  # 10%×200×2 jump + ceil(10%×12) plant
+        self.assertEqual((by["Staterooms"].tons, by["Staterooms"].cost), (12, 1.5))  # 3 × 4t / MCr0.5
+        self.assertEqual(by["Cargo hold"].tons, 105)           # 200 − 95 used
+        self.assertEqual(r.tonnage_used, 200)                  # cargo absorbs the remainder
+        self.assertEqual(r.tonnage_free, 0)
         self.assertEqual(r.warnings, [])
+
+    def test_min_crew_suggestion(self):
+        # pilot + astrogator (jump) + 1 engineer per 35t of drives+power (min 1)
+        from lorehound.builders.ship import min_crew
+        self.assertEqual(min_crew(jump=2, drive_power_tons=31), 3)   # 1 + 1 + 1
+        self.assertEqual(min_crew(jump=0, drive_power_tons=10), 2)   # 1 + 0 + 1
+        self.assertEqual(min_crew(jump=2, drive_power_tons=80), 5)   # 1 + 1 + ceil(80/35)=3
 
     def test_over_tonnage_warns(self):
         # A 10t hull can't hold a 10t (minimum) jump drive plus a bridge.
@@ -190,15 +196,18 @@ class TestShipFlow(unittest.TestCase):
 
     def test_flow_walks_steps_and_computes(self):
         s = self._session()
+        # no sensors in the catalogue → the sensor step is skipped; staterooms follows computer
         for step_id, value in [("hull", "200"), ("config", "Streamlined"), ("thrust", "2"),
-                               ("jump", "2"), ("power", "Fusion (TL8)"), ("computer", "Computer/5")]:
+                               ("jump", "2"), ("power", "Fusion (TL8)"), ("computer", "Computer/5"),
+                               ("staterooms", "3")]:
             self.assertEqual(s.current.id, step_id)
             s.resolve(value)
-        self.assertTrue(s.complete)                 # no sensors in catalogue → flow ends
+        self.assertTrue(s.complete)
         d = s.draft
         self.assertEqual((d.hull_tons, d.config, d.thrust, d.jump), (200, "Streamlined", 2, 2))
-        self.assertEqual(d.tonnage_used, 41)
-        self.assertAlmostEqual(d.total_cost, 49.53)
+        self.assertEqual(d.staterooms, 3)
+        self.assertEqual(d.tonnage_used, 200)                  # fuel + staterooms + cargo → full
+        self.assertAlmostEqual(d.total_cost, 51.03)            # 49.53 + MCr1.5 staterooms
         self.assertEqual(d.source, "High Guard")
 
     def test_back_returns_to_previous_step(self):

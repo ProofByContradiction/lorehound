@@ -55,6 +55,7 @@ class ShipBuild:
     power_plant: str = ""
     computer: str = ""
     sensor: str = ""
+    staterooms: int = 0
     # computed breakdown, filled at the end of the flow
     lines: list[tuple[str, float, float]] = field(default_factory=list)  # (label, tons, MCr)
     tonnage_used: float = 0.0

@@ -30,6 +30,16 @@ J_DRIVE_MIN_TONS = 10
 BASIC_POWER_FRACTION = 0.20         # of hull tonnage
 DRIVE_POWER_FRACTION = 0.10         # × hull × rating, for each of M- and J-drive
 BRIDGE_MCR_PER_100T = 0.5
+STATEROOM_TONS = 4                  # each stateroom is 4 tons…
+STATEROOM_MCR = 0.5                 # …and MCr0.5
+JUMP_FUEL_FRACTION = 0.10           # × hull × jump number, per jump
+POWERPLANT_FUEL_FRACTION = 0.10     # × power plant tonnage, per 4 weeks (min 1 ton)
+
+
+def min_crew(jump: int, drive_power_tons: float) -> int:
+    """A rough minimum crew: pilot, an astrogator if the ship jumps, and an engineer per
+    35 tons of drives + power plant. Used only to suggest a stateroom count."""
+    return 1 + (1 if jump else 0) + max(1, math.ceil(drive_power_tons / 35))
 
 
 def _mcr(cost: str) -> float:
@@ -309,8 +319,11 @@ def power_required(hull: int, thrust: int, jump: int) -> float:
 
 
 def compute_ship(data: ShipData, *, hull_tons: int, config: str, thrust: int, jump: int,
-                 power_plant: str, computer: str = "", sensor: str = "") -> ShipReport:
-    """The Core-MVP construction maths → a per-component tonnage/cost breakdown."""
+                 power_plant: str, computer: str = "", sensor: str = "",
+                 staterooms: int = 0) -> ShipReport:
+    """The construction maths → a per-component tonnage/cost breakdown, incl. fuel (one
+    jump + four weeks of power), staterooms, and the cargo hold (whatever tonnage is
+    left)."""
     lines: list[Line] = []
     warnings: list[str] = []
 
@@ -348,8 +361,26 @@ def compute_ship(data: ShipData, *, hull_tons: int, config: str, thrust: int, ju
         if sen:
             lines.append(Line(f"Sensors — {sen.name}", sen.tons, sen.cost))
 
+    # Fuel — enough for one jump plus four weeks of power-plant operation.
+    pp_tons = next((line.tons for line in lines if line.label.startswith("Power Plant")), 0.0)
+    jump_fuel = JUMP_FUEL_FRACTION * hull_tons * jump
+    pp_fuel = max(1, math.ceil(POWERPLANT_FUEL_FRACTION * pp_tons)) if pp_tons else 0
+    fuel = jump_fuel + pp_fuel
+    if fuel:
+        lines.append(Line("Fuel — 1 jump + 4 weeks", round(fuel, 1), 0.0))
+
+    if staterooms:
+        lines.append(Line(f"Staterooms ×{staterooms}",
+                          float(staterooms * STATEROOM_TONS), staterooms * STATEROOM_MCR))
+
+    # Cargo hold soaks up whatever tonnage is left.
+    used = sum(line.tons for line in lines)
+    cargo = hull_tons - used
+    if cargo > 0.05:
+        lines.append(Line("Cargo hold", round(cargo, 1), 0.0))
+
     report = ShipReport(hull_tons=hull_tons, lines=lines, warnings=warnings)
-    if report.tonnage_used > hull_tons:
+    if report.tonnage_used > hull_tons + 0.05:
         warnings.append(f"over tonnage: {report.tonnage_used:.0f}t used of {hull_tons}t")
     return report
 
@@ -382,8 +413,8 @@ def _mod_label(m: float) -> str:
 
 
 def ship_flow(ctx):
-    """Core-MVP ship flow: hull tonnage → configuration → Thrust → Jump → power plant →
-    computer → sensors, then compute the tonnage/cost breakdown onto the draft."""
+    """Ship flow: hull tonnage → configuration → Thrust → Jump → power plant → computer →
+    sensors → staterooms, then compute the breakdown (adding fuel and the cargo hold)."""
     from ..chargen.model import Option, Step, StepKind
 
     data: ShipData | None = ctx.data
@@ -435,9 +466,26 @@ def ship_flow(ctx):
                                     for s in data.sensors])
         draft.sensor = "" if pick.value == _NONE else pick.value
 
+    # Staterooms — suggest the minimum crew, let the user add passengers.
+    ts, js = data.thrust.get(draft.thrust), data.jump.get(draft.jump)
+    pp = data.power_plant(draft.power_plant)
+    drive_power = ((m_drive_tons(draft.hull_tons, ts) if ts else 0)
+                   + (j_drive_tons(draft.hull_tons, js) if js else 0)
+                   + (math.ceil(power_required(draft.hull_tons, draft.thrust, draft.jump) / pp.power_per_ton)
+                      if pp else 0))
+    crew = min_crew(draft.jump, drive_power)
+    counts = sorted({crew, crew + 2, crew + 4, crew + 10})
+    pick = yield from choose(
+        "staterooms", "How many staterooms?",
+        [Option(str(n), f"{n} staterooms · {n * STATEROOM_TONS}t · MCr{n * STATEROOM_MCR:g}"
+                + (f"  (min {crew} crew)" if n == crew else f"  (+{n - crew} passengers)"))
+         for n in counts],
+        detail=f"Each stateroom is {STATEROOM_TONS} tons, MCr{STATEROOM_MCR:g}. This ship needs ≈{crew} crew.")
+    draft.staterooms = int(pick.value)
+
     report = compute_ship(data, hull_tons=draft.hull_tons, config=draft.config,
                           thrust=draft.thrust, jump=draft.jump, power_plant=draft.power_plant,
-                          computer=draft.computer, sensor=draft.sensor)
+                          computer=draft.computer, sensor=draft.sensor, staterooms=draft.staterooms)
     draft.lines = [(line.label, line.tons, line.cost) for line in report.lines]
     draft.tonnage_used = report.tonnage_used
     draft.total_cost = report.total_cost
