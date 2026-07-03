@@ -2,7 +2,7 @@
 
 import unittest
 
-from lorehound.text_utils import _wordset, repair_ligatures
+from lorehound.text_utils import _wordset, normalize_ligatures, repair_ligatures
 
 # The repair needs a real system word list; CI containers may not have one, in
 # which case it's a deliberate no-op (so the assertions below are skipped).
@@ -37,3 +37,24 @@ class TestRepairLigaturesAlwaysSafe(unittest.TestCase):
         # with or without a dictionary, repair is total and returns a string
         self.assertIsInstance(repair_ligatures("any text with fre"), str)
         self.assertEqual(repair_ligatures(""), "")
+
+
+class TestNormalizeLigatures(unittest.TestCase):
+    """Composed ligature glyphs → ASCII (dictionary-free, always applied)."""
+
+    def test_maps_each_glyph(self):
+        self.assertEqual(normalize_ligatures("eﬀect"), "effect")
+        self.assertEqual(normalize_ligatures("ﬁre"), "fire")
+        self.assertEqual(normalize_ligatures("reﬂect"), "reflect")
+        self.assertEqual(normalize_ligatures("aﬃnity"), "affinity")     # ﬃ → ffi
+        self.assertEqual(normalize_ligatures("baﬄe"), "baffle")         # ﬄ → ffl
+        self.assertEqual(normalize_ligatures("Pathﬁnder"), "Pathfinder")
+
+    def test_plain_text_untouched(self):
+        self.assertEqual(normalize_ligatures("no ligatures here"), "no ligatures here")
+        self.assertEqual(normalize_ligatures(""), "")
+
+    def test_normalised_text_tokenises_for_search(self):
+        from lorehound.search_index import tokenize
+        self.assertEqual(tokenize(normalize_ligatures("the eﬀect of ﬁre")),
+                         ["the", "effect", "of", "fire"])
