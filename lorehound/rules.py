@@ -468,6 +468,75 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     return chunks
 
 
+_MD_CAT = {"rules": "tables", "items": "items", "transport": "transport", "card": "card"}
+
+
+def _md_table_cells(rows: list[list[str]]) -> set[str]:
+    """Non-trivial cell values (upper, ≥2 chars) — the fingerprint used to tell whether a
+    find_tables table and a markdown table cover the same physical table."""
+    return {v for r in rows for c in r if len(v := (c or "").strip().upper()) >= 2}
+
+
+def _page_num(locator: str) -> int | None:
+    m = re.search(r"\d+", locator or "")
+    return int(m.group()) if m else None
+
+
+def _markdown_table_chunk(path: str, mt) -> Chunk | None:
+    """A searchable Chunk from a harvested markdown table — or None if it isn't a real,
+    labelled table worth indexing (a worksheet fragment, a running header, too sparse)."""
+    from . import sources
+    from .pdf_tables import classify_table
+
+    rows = mt.rows
+    data = rows[1:] if rows else []
+    ncols = max((len(r) for r in rows), default=0)
+    if ncols < 2 or len(data) < 2 or not _is_real_table(rows):
+        return None
+    filled = sum(1 for r in data for c in r if (c or "").strip())
+    if filled / (sum(len(r) for r in data) or 1) < 0.5:
+        return None  # a mostly-empty grid (a blank worksheet)
+    game, book = _split_game_and_file(path)
+    category = classify_table("", rows, sources.profile_for(game))
+    if category == "noise":
+        return None
+    name = _table_name(mt.title, "", rows)
+    flat = "\n".join(" ".join(c for c in r if c) for r in rows)
+    return Chunk(
+        game=game,
+        source=book,
+        category=_MD_CAT.get(category, "tables"),
+        section=name,
+        locator=f"p. {mt.page}" if mt.page else "",
+        text=f"{name}\n{flat}",
+        rows=rows,
+    )
+
+
+def _reconcile_markdown_tables(path: str, harvested: list, ft_chunks: list[Chunk]) -> tuple:
+    """Fold the labelled markdown tables into the table chunk set. find_tables delabels
+    many multi-column tables (their titles/row-labels are lost); the markdown keeps them.
+    So where a good markdown table covers the same page's content as a find_tables chunk,
+    prefer the markdown one (drop the delabelled find_tables chunk); otherwise add it.
+    Returns ``(markdown_chunks, kept_find_tables_chunks)``."""
+    md_chunks = [c for c in (_markdown_table_chunk(path, mt) for mt in harvested) if c]
+    md_cells_by_page: dict[int | None, list[set[str]]] = {}
+    for c in md_chunks:
+        md_cells_by_page.setdefault(_page_num(c.locator), []).append(_md_table_cells(c.rows))
+    kept: list[Chunk] = []
+    for f in ft_chunks:
+        fcells = _md_table_cells(f.rows)
+        page_md = md_cells_by_page.get(_page_num(f.locator), [])
+        # Subsumed when a markdown table on the same page contains most of this table's
+        # cells (same numbers, now with labels) — then the markdown version replaces it.
+        subsumed = bool(fcells) and any(
+            len(fcells & mcells) / len(fcells) >= 0.5 for mcells in page_md
+        )
+        if not subsumed:
+            kept.append(f)
+    return md_chunks, kept
+
+
 def _is_catalog_name(name: str) -> bool:
     """True if `name` reads like an item/vehicle name rather than a rules-table
     row that leaked in (a dice result, a percentage outcome, a full sentence)."""
@@ -760,10 +829,6 @@ class RulesService:
             md_tables: dict[str, list] = {}
             for doc in docs:
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
-                chunks.extend(_tables_for_doc(doc.name, doc.tables))
-                boxes = _stat_box_chunks_for_doc(doc.name, doc.text)
-                chunks.extend(boxes)
-                stat_box_chunks.extend(boxes)
                 game, book = _split_game_and_file(doc.name)
                 # Harvest labelled markdown pipe-tables (builders read these where
                 # find_tables delabels — e.g. High Guard ship construction).
@@ -772,6 +837,16 @@ class RulesService:
                     mt.source = book
                 if harvested:
                     md_tables.setdefault(game, []).extend(harvested)
+                # Reconcile find_tables tables with the labelled markdown ones: prefer the
+                # markdown version where they overlap (find_tables delabels many), and add
+                # the labelled tables it recovered — so /lookup and /table can find them.
+                ft_chunks = _tables_for_doc(doc.name, doc.tables)
+                md_chunks, ft_chunks = _reconcile_markdown_tables(doc.name, harvested, ft_chunks)
+                chunks.extend(ft_chunks)
+                chunks.extend(md_chunks)
+                boxes = _stat_box_chunks_for_doc(doc.name, doc.text)
+                chunks.extend(boxes)
+                stat_box_chunks.extend(boxes)
                 # Parse any prose-only chargen tables (e.g. T2K childhood) for games
                 # with a chargen system, so the flow can read them from the index.
                 system = chargen_for(game)
