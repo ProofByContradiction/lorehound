@@ -62,6 +62,15 @@ _NOISE_LINE = re.compile(
 # that so "Heightened (+1)" / "Heightened (3rd)" count as fields, not lost text.
 _FIELD_LABEL = re.compile(r"^[A-Z][A-Za-z][A-Za-z0-9 '()+/-]{0,24}$")
 
+# A line that opens a "Heightened (Nth)" entry. Its value is prose that can wrap onto
+# a new *sentence* (capital-initial) — e.g. Teleport's "...same solar system. Assuming
+# you have accurate knowledge...". The lowercase-only wrap rule below would leave that
+# sentence orphaned into the description, so a Heightened entry keeps absorbing plain
+# lines (any case) until the next bold label. Scoped to Heightened specifically so the
+# interleaved bleed in PF's multi-column feat layout (capital "Reflexive Shield 6"
+# fragments) is untouched.
+_HEIGHTENED_HEAD = re.compile(r"^\*\*Heightened\b", re.I)
+
 
 @dataclass
 class StatBox:
@@ -128,7 +137,9 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
         # isn't absorbed into the last field.
         lines: list[str] = []
         for ln in raw:
-            if lines and not ln.startswith("**") and ln[:1].islower():
+            cont = lines and not ln.startswith("**")
+            wrap = cont and (ln[:1].islower() or _HEIGHTENED_HEAD.match(lines[-1]))
+            if wrap:
                 lines[-1] = f"{lines[-1]} {ln}"
             else:
                 lines.append(ln)
