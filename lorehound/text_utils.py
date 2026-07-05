@@ -63,6 +63,24 @@ def normalize_ligatures(text: str) -> str:
     return text.translate(_LIGATURE_MAP)
 
 
+# C0 control characters (U+0000–U+001F) and DEL (U+007F), minus the whitespace that
+# carries structure (\t \n \r). PDF extraction can leave stray control bytes mid-text
+# — mostly \x08 (backspace), the odd \x07 (bell) — which are invisible but break the
+# search tokenizer (they split a word into two tokens) and litter /lookup excerpts.
+# Mapping each to None makes str.translate DELETE it (they sit at word boundaries, so
+# removing them rejoins nothing and is safe — unlike replacing with a space, which
+# would inject spurious gaps before the following ** / space / newline).
+_CONTROL_DELETE = {c: None for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)}
+_CONTROL_DELETE[0x7F] = None
+
+
+def strip_control_chars(text: str) -> str:
+    """Delete C0 control characters (and DEL) from extracted text, keeping the
+    structural whitespace \\t \\n \\r intact. Deterministic; index-time normalization
+    in the same spirit as :func:`normalize_ligatures`."""
+    return text.translate(_CONTROL_DELETE)
+
+
 def repair_ligatures(text: str) -> str:
     """Repair ``fi``/``fl`` ligatures that a broken font CMap collapsed to a bare
     ``f`` during extraction ("fre"→"fire", "Refex"→"Reflex", "difcult"→"difficult").

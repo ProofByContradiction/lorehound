@@ -429,7 +429,7 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     """
     from . import sources
     from .pdf_tables import classify_table
-    from .text_utils import normalize_ligatures
+    from .text_utils import normalize_ligatures, strip_control_chars
 
     game, book = _split_game_and_file(path)
     profile = sources.profile_for(game)  # supplies chapter-fallback routing
@@ -441,12 +441,15 @@ def _tables_for_doc(path: str, tables: list[dict]) -> list[Chunk]:
     }
     chunks: list[Chunk] = []
     for t in tables:
-        rows = [[normalize_ligatures(c) if c else c for c in r] for r in (t.get("rows") or [])]
+        rows = [[strip_control_chars(normalize_ligatures(c)) if c else c for c in r] for r in (t.get("rows") or [])]
         if profile:  # repair a mis-segmented catalogue grid (e.g. PF armor) before routing
             rows = profile.normalize_rows(rows)
         if len(rows) < 2 or not _is_real_table(rows):
             continue
-        name = _table_name(t.get("title", ""), t.get("section", ""), rows)
+        # The table TITLE comes straight from the extractor (unlike doc.text, it skips
+        # the up-front normalization), so strip its stray control bytes here too — else
+        # a mangled caption like "LETHARGY POISON\x08" leaks into the section + text.
+        name = strip_control_chars(_table_name(t.get("title", ""), t.get("section", ""), rows))
         chapter = (t.get("chapter") or "").strip()
         section = f"{chapter} › {name}" if chapter else name
         flat = "\n".join(" ".join(c for c in r if c) for r in rows)
@@ -822,7 +825,7 @@ class RulesService:
         self._indexing = True
         try:
             from .markdown_tables import harvest_tables
-            from .text_utils import normalize_ligatures
+            from .text_utils import normalize_ligatures, strip_control_chars
 
             docs = self.drive.fetch_all(force=force)
             chunks: list[Chunk] = []
@@ -830,10 +833,12 @@ class RulesService:
             aux: dict[str, dict] = {}
             md_tables: dict[str, list] = {}
             for doc in docs:
-                # Normalise composed ligature glyphs (ﬀﬁﬂ…) once up front, so every chunk
-                # built below — prose, stat boxes, markdown tables — is clean for search
-                # and display (the tokenizer can't see through the glyphs otherwise).
-                doc.text = normalize_ligatures(doc.text)
+                # Normalise composed ligature glyphs (ﬀﬁﬂ…) and delete stray control
+                # bytes (\x08/\x07 the extractor leaves mid-text) once up front, so every
+                # chunk built below — prose, stat boxes, markdown tables — is clean for
+                # search and display (the tokenizer can't see through glyphs or control
+                # chars, and control chars show as invisible junk in /lookup excerpts).
+                doc.text = strip_control_chars(normalize_ligatures(doc.text))
                 chunks.extend(_chunks_for_doc(doc.name, doc.text))
                 game, book = _split_game_and_file(doc.name)
                 # Harvest labelled markdown pipe-tables (builders read these where
