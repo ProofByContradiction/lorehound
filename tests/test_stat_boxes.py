@@ -166,3 +166,51 @@ class TestGeneralizedKinds(unittest.TestCase):
         boxes = parse_stat_boxes("##### **BLESS SPELL 1**\n**Range** 30 feet\nBless allies.\n")
         self.assertEqual(len(boxes), 1)
         self.assertEqual(boxes[0].category, "spell")
+
+
+class TestFeatSidebarBleed(unittest.TestCase):
+    """PF's alphabetical feats-by-level sidebar bleeds <Name> <Level> fragments into a
+    feat's description; the monotonic-alphabetical-run strip removes them (feats only)."""
+
+    def test_alphabetical_run_stripped_prose_kept(self):
+        md = ("##### **POWER ATTACK FEAT 1**\n"
+              "Reactive Shield 1\nReflexive Shield 6\n"
+              "You unleash a particularly powerful attack. Revealing Stab 6 Make a melee "
+              "Strike. Savage Critical 18\nShatter Defenses 6 This counts as two attacks.\n")
+        desc = parse_stat_boxes(md)[0].description
+        for frag in ("Reactive Shield", "Reflexive Shield", "Revealing Stab",
+                     "Savage Critical", "Shatter Defenses"):
+            self.assertNotIn(frag, desc)
+        self.assertIn("You unleash a particularly powerful attack", desc)
+        self.assertIn("Make a melee Strike", desc)
+        self.assertIn("This counts as two attacks", desc)
+
+    def test_leading_prose_word_not_swallowed(self):
+        # "...Make a Strike. The Incredible Ricochet 12" — "The" is prose, the fragment
+        # is "Incredible Ricochet"; the run strip must keep "The Strike gains…".
+        md = ("##### **EXACTING STRIKE FEAT 1**\n"
+              "You make a controlled attack. Make a Strike. The Improved Twin Riposte 14 "
+              "Incredible Aim 8 Incredible Ricochet 12 Intimidating Strike 2 Strike gains "
+              "the following failure effect.\n")
+        desc = parse_stat_boxes(md)[0].description
+        self.assertNotIn("Incredible Ricochet", desc)
+        self.assertNotIn("Improved Twin Riposte", desc)
+        self.assertIn("The Strike gains the following failure effect", desc)
+
+    def test_incidental_capital_number_below_threshold_kept(self):
+        # A clean feat with a couple of incidental "<Cap> <num>" phrases (no long run)
+        # must be left exactly as-is — the trigger needs a run of >=4.
+        md = ("##### **WIDEN SPELL FEAT 1**\n"
+              "You manipulate your spell. Add 5 feet to the radius. Around 3 foes.\n")
+        desc = parse_stat_boxes(md)[0].description
+        self.assertIn("Add 5 feet to the radius", desc)
+        self.assertIn("Around 3 foes", desc)
+
+    def test_only_feats_are_stripped_not_spells(self):
+        # The sidebar bleed is a feat-layout artifact; a spell with the same shape is
+        # left untouched (guards against over-eager stripping of legitimate spell text).
+        md = ("##### **SOME SPELL SPELL 1**\n"
+              "You cast it. Reactive Shield 1 Reflexive Shield 6 Revealing Stab 6 "
+              "Savage Critical 18 It works.\n")
+        desc = parse_stat_boxes(md)[0].description
+        self.assertIn("Reactive Shield 1", desc)   # NOT stripped — spell, not feat
