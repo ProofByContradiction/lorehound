@@ -2,7 +2,12 @@
 
 import unittest
 
-from lorehound.text_utils import _wordset, normalize_ligatures, repair_ligatures
+from lorehound.text_utils import (
+    _wordset,
+    normalize_ligatures,
+    repair_ligatures,
+    strip_control_chars,
+)
 
 # The repair needs a real system word list; CI containers may not have one, in
 # which case it's a deliberate no-op (so the assertions below are skipped).
@@ -58,3 +63,30 @@ class TestNormalizeLigatures(unittest.TestCase):
         from lorehound.search_index import tokenize
         self.assertEqual(tokenize(normalize_ligatures("the eﬀect of ﬁre")),
                          ["the", "effect", "of", "fire"])
+
+
+class TestStripControlChars(unittest.TestCase):
+    """Delete stray C0 control bytes the extractor leaves mid-text (\\x08/\\x07),
+    keeping the structural whitespace \\t \\n \\r."""
+
+    def test_deletes_corpus_offenders(self):
+        # \x08 (backspace) and \x07 (bell) are the bytes actually found in the library.
+        self.assertEqual(strip_control_chars("LETHARGY POISON\x08"), "LETHARGY POISON")
+        self.assertEqual(strip_control_chars("Introduction\x08 4"), "Introduction 4")
+        self.assertEqual(strip_control_chars("bell\x07gone"), "bellgone")
+
+    def test_deletes_other_c0_and_del(self):
+        self.assertEqual(strip_control_chars("a\x00b\x1f\x7fc"), "abc")
+
+    def test_preserves_structural_whitespace(self):
+        # newlines drive chunking; tabs/carriage-returns are structural — keep them all.
+        self.assertEqual(strip_control_chars("l1\nl2\tcol\rx"), "l1\nl2\tcol\rx")
+
+    def test_plain_text_untouched(self):
+        self.assertEqual(strip_control_chars("no control chars here"), "no control chars here")
+        self.assertEqual(strip_control_chars(""), "")
+
+    def test_stripped_word_tokenises_as_one(self):
+        # a control char mid-word otherwise splits the search token in two.
+        from lorehound.search_index import tokenize
+        self.assertEqual(tokenize(strip_control_chars("eff\x08ect")), ["effect"])
