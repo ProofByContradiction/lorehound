@@ -81,6 +81,41 @@ class TestParseStatBoxes(unittest.TestCase):
         self.assertIn(("Heightened (+1)", "The damage increases by 2d6."), box.fields)
         self.assertNotIn("Heightened", box.description)
 
+    def test_heightened_value_absorbs_capital_wrapped_sentence(self):
+        # Regression: a Heightened value whose text wraps onto a new *sentence*
+        # (capital-initial) must stay in the field, not orphan into the description.
+        # This is Teleport's level-9 "...same solar system. Assuming you have accurate
+        # knowledge..." — the capital "Assuming" used to leak into the description.
+        md = ("##### **TELEPORT SPELL 6**\n"
+              "**Range** 100 miles\n"
+              "You and the targets are transported within range.\n"
+              "**Heightened (9th)** You and the other targets can travel to any\n"
+              "location on another planet within the same solar system.\n"
+              "Assuming you have accurate knowledge of the location, you\n"
+              "arrive on the new planet 100 miles off target.\n")
+        box = parse_stat_boxes(md)[0]
+        h9 = dict(box.fields)["Heightened (9th)"]
+        self.assertIn("Assuming you have accurate knowledge", h9)
+        self.assertTrue(h9.endswith("100 miles off target."))
+        self.assertNotIn("Assuming", box.description)
+        # the real description is untouched
+        self.assertEqual(box.description,
+                         "You and the targets are transported within range.")
+
+    def test_capital_wrap_only_applies_to_heightened(self):
+        # The any-case continuation is scoped to Heightened so PF's interleaved
+        # multi-column feat bleed (capital "Reflexive Shield 6" fragments after a
+        # non-Heightened field) is NOT absorbed into that field's value.
+        md = ("##### **POWER ATTACK FEAT 1**\n"
+              "**Requirements** You are wielding a melee weapon.\n"
+              "Reflexive Shield 6\n"
+              "You unleash a powerful attack.\n")
+        box = parse_stat_boxes(md)[0]
+        self.assertEqual(dict(box.fields)["Requirements"],
+                         "You are wielding a melee weapon.")
+        # the capital bleed line is not glued onto Requirements
+        self.assertNotIn("Reflexive Shield", dict(box.fields)["Requirements"])
+
     def test_wrapped_field_value_absorbs_continuation(self):
         # a field value that wraps to the next visual line keeps its tail instead of
         # leaking the first word into the description
