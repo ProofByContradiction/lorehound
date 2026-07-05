@@ -49,9 +49,10 @@ _FACT_COVERAGE = 0.70   # fraction of a fact's content tokens that must be prese
 # (2026-06-22, top-5, 8 entries). The retrieval overhaul (stemming + worked-example
 # rescue) plus calibrating the gold set to realistic keyword queries + book-aligned
 # facts lifted gate fact-recall to ~0.83 (2026-06-26, top-8 to match /rule); tuning
-# HEADING_BOOST 2.0→1.0 (2026-06-27) lifted it again to ~0.88. The in-suite regression
-# FLOOR (tests/test_retrieval.py) sits below this so the test fails only on a true drop.
-_DEFAULT_THRESHOLD = 0.80
+# HEADING_BOOST 2.0→1.0 (2026-06-27) lifted it to ~0.88; the 2026-07-04 eval-honesty
+# pass (scorer folds -s inflection + Traveller facts re-aligned to the 2E book) to
+# ~0.95. Kept level with the in-suite regression FLOOR (tests/test_retrieval.py).
+_DEFAULT_THRESHOLD = 0.85
 
 
 def load_gold(path: str = _GOLD) -> list[dict]:
@@ -69,13 +70,29 @@ def _content_tokens(s: str) -> list[str]:
     return [t for t in _TOKEN.findall(s.lower()) if t not in _STOP and (len(t) >= 2 or t.isdigit())]
 
 
-def _token_hit(tok: str, hay: set[str]) -> bool:
-    """Is ``tok`` present in the passage tokens, tolerant of inflection? Numbers and
-    short tokens match exactly; longer words match via a shared prefix in either
-    direction (so 'success'~'successes', 'roll'~'rolls', 'mod'~… stays exact)."""
+def _singular(tok: str) -> str:
+    """Fold a regular trailing ``-s`` (plural or 3rd-person verb) so 'adds'~'add',
+    'rolls'~'roll', 'DMs'~'DM' compare equal — the short-word inflection the index
+    tokenizer leaves alone (it only folds words longer than four letters). Kept
+    conservative: -ss/-us/-is/-ous endings (success, bonus, axis, various) keep
+    their s so they don't over-fold."""
+    if len(tok) >= 3 and tok.endswith("s") and not tok.endswith(("ss", "us", "is", "ous")):
+        return tok[:-1]
+    return tok
+
+
+def _token_hit(tok: str, hay: set[str], hay_sing: set[str]) -> bool:
+    """Is ``tok`` present in the passage tokens, tolerant of inflection? An exact
+    hit wins; else a regular -s fold matches ('adds'~'add', 'DMs'~'DM'); else a
+    longer word matches via a shared 4+ char prefix ('success'~'successes').
+    Numbers must match exactly."""
     if tok in hay:
         return True
-    if tok.isdigit() or len(tok) < 4:
+    if tok.isdigit():
+        return False
+    if _singular(tok) in hay_sing:
+        return True
+    if len(tok) < 4:
         return False
     return any(len(p) >= 4 and (p.startswith(tok) or tok.startswith(p)) for p in hay)
 
@@ -94,7 +111,8 @@ def fact_present(fact: str, hay_norm: str, hay_tokens: set[str]) -> tuple[bool, 
     toks = _content_tokens(fact)
     if not toks:
         return (fn in hay_norm if fn else False), 0.0
-    cover = sum(_token_hit(t, hay_tokens) for t in toks) / len(toks)
+    hay_sing = {_singular(t) for t in hay_tokens}
+    cover = sum(_token_hit(t, hay_tokens, hay_sing) for t in toks) / len(toks)
     return cover >= _FACT_COVERAGE, cover
 
 

@@ -22,11 +22,12 @@ from lorehound.search_index import Chunk, SearchIndex
 from scripts.retrieval_eval import _norm, fact_present, resolve_game
 
 # In-suite regression floor for the live gold eval. After the retrieval overhaul
-# (stemming + worked-example rescue), gold-set calibration, and tuning HEADING_BOOST
-# 2.0→1.0, gate fact-recall is ~0.88 (2026-06-27, top-8). This floor sits below that
-# with headroom for newly-added (initially failing) targets — roughly one new hard
-# target costs ~0.08 — so the test fails only on a genuine regression.
-_REGRESSION_FLOOR = 0.75
+# (stemming + worked-example rescue), gold-set calibration, tuning HEADING_BOOST
+# 2.0→1.0, and the 2026-07-04 eval-honesty pass (scorer folds -s inflection; Traveller
+# facts re-aligned to the indexed 2E book), gate fact-recall is ~0.95 (top-8). This
+# floor sits below that with headroom for newly-added (initially failing) targets —
+# roughly one new hard target costs ~0.08 — so the test fails only on a genuine regression.
+_REGRESSION_FLOOR = 0.85
 
 
 def _toks(s: str) -> set:
@@ -191,6 +192,24 @@ class TestGoldMatching(unittest.TestCase):
         ok, cover = fact_present("unskilled untrained penalty -3 DM", _norm(hay), _toks(_norm(hay)))
         self.assertFalse(ok)
         self.assertLess(cover, 0.5)
+
+    def test_fact_present_folds_short_inflection(self):
+        # The regular -s fold the old scorer missed: 'add'~'adds' and 'DM'~'DMs' are
+        # both < 4 chars, so exact-match-only left them unmatched even though the
+        # defining sentence is worded with the inflected form.
+        hay = "the traveller adds their skill level and a characteristic dms bonus"
+        ok, _ = fact_present("add skill level characteristic dm", _norm(hay), _toks(_norm(hay)))
+        self.assertTrue(ok)
+
+    def test_singular_fold_is_conservative(self):
+        # Regular trailing -s folds; -ss/-us/-is endings keep their s so they don't
+        # over-fold into spurious matches.
+        from scripts.retrieval_eval import _singular
+
+        self.assertEqual(_singular("adds"), "add")
+        self.assertEqual(_singular("dms"), "dm")
+        self.assertEqual(_singular("success"), "success")  # -ss kept
+        self.assertEqual(_singular("bonus"), "bonus")      # -us kept
 
 
 class TestLookupBadges(unittest.TestCase):
