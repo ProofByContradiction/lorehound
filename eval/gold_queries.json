@@ -12,7 +12,7 @@
       "T2K (Free League 4E) has no free authoritative SRD; T2K entries below are core mechanics from twilight.py, not an external source."
     ],
     "created": "2026-06-21",
-    "status": "wired into scripts/retrieval_eval.py + tests/test_retrieval.py (regression guard). Baseline fact-recall 0.32 (2026-06-22, 8 entries, top-5). 2026-06-26 retrieval overhaul: added 4 T2K targets, then stemming + worked-example rescue + queries calibrated to realistic Discord keyword usage with facts worded to the indexed 2E book (BM25 has no semantic search, per the free/local constraint) → gate ~0.83 over 12 stable entries at top-8 (matching /rule). Residual misses are granular table values that miss top-k. Expand as new sources arrive; keep queries keyword-style and facts book-aligned."
+    "status": "wired into scripts/retrieval_eval.py + tests/test_retrieval.py (regression guard). Baseline fact-recall 0.32 (2026-06-22, 8 entries, top-5). 2026-06-26 retrieval overhaul: added 4 T2K targets, then stemming + worked-example rescue + queries calibrated to realistic Discord keyword usage with facts worded to the indexed 2E book (BM25 has no semantic search, per the free/local constraint) → gate ~0.83 over 12 stable entries at top-8 (matching /rule). 2026-07-04 eval-honesty pass: (a) the fuzzy scorer now folds regular -s inflection (adds~add, DMs~DM) so it stops under-counting real matches; (b) the Traveller facts, still carrying MGT1e-SRD wording, were re-aligned to the indexed 2E book (target numbers not DMs; 'unskilled' not 'untrained'), matching the T2K calibration — a diagnostic confirmed the defining passage was already retrieved top-1/2 for every one, so this corrects measurement, not retrieval → gate ~0.95. Residual misses are granular table values / cross-section rules that miss top-k. Expand as new sources arrive; keep queries keyword-style and facts book-aligned."
   },
   "entries": [
     {
@@ -28,19 +28,21 @@
       "id": "trav-difficulty-dms",
       "system": "Traveller (Mongoose)",
       "query": "What are the task difficulty modifiers?",
-      "key_facts": ["Simple +6", "Easy +4", "Routine +2", "Average +0", "Difficult -2", "Very Difficult -4", "Formidable -6"],
+      "key_facts": ["Simple 2+", "Easy 4+", "Routine 6+", "Average 8+", "Difficult 10+", "Very Difficult 12+", "Formidable 14+"],
       "source": "https://www.traveller-srd.com/core-rules/skills/",
       "source_tier": "srd-ogl",
-      "edition_sensitive": false
+      "edition_sensitive": false,
+      "notes": "Facts worded to the indexed 2E book's TASK DIFFICULTIES table, which states difficulties as TARGET NUMBERS (Average 8+) — MGT1e's SRD stated them as DMs (Average +0). Same difficulty ladder, different representation; the 2E form is what our library contains."
     },
     {
       "id": "trav-untrained-penalty",
       "system": "Traveller (Mongoose)",
       "query": "unskilled penalty",
-      "key_facts": ["using a skill untrained takes a penalty", "the unskilled penalty is -3 DM"],
+      "key_facts": ["not having the skill inflicts an unskilled penalty", "the unskilled penalty is DM-3"],
       "source": "https://www.traveller-srd.com/core-rules/skills/",
       "source_tier": "srd-ogl",
-      "edition_sensitive": false
+      "edition_sensitive": false,
+      "notes": "Worded to the 2E book: it says 'not having the skill... inflicts the usual DM-3 unskilled penalty' (the 1e SRD term was 'untrained')."
     },
     {
       "id": "trav-effect",
@@ -93,10 +95,11 @@
       "id": "t2k-ammo-dice",
       "system": "Twilight 2000 (4E)",
       "query": "ammo dice",
-      "key_facts": ["ammo dice are D6 rolled with a ranged attack", "each 6 on an ammo die is an extra hit", "ammo dice are re-rolled when you push"],
+      "key_facts": ["ammo dice are D6 rolled with a ranged attack", "you add ammo dice to your firearm skill roll", "ammo dice are re-rolled when you push"],
       "source": "lorehound/twilight.py",
       "source_tier": "repo-mechanics",
-      "edition_sensitive": false
+      "edition_sensitive": false,
+      "notes": "Facts are the ammo-dice rules stated where 'ammo dice' is defined (add to skill roll; re-roll on push). The prior 'each 6 is an extra hit' fact is the GENERAL success rule (6s = successes = hits), which lives in the dice-rolling section, not the ammo-dice section — so the keyword query 'ammo dice' can't surface it (BM25, no semantic search)."
     },
     {
       "id": "t2k-aging",
