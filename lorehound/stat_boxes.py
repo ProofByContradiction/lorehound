@@ -117,6 +117,94 @@ def _accepted_kinds(heads: list[re.Match]) -> set[str]:
     return accepted
 
 
+# ── Feat "sidebar bleed" ──────────────────────────────────────────────────────
+# Pathfinder's two-column feat pages carry an alphabetical "feats by level" index
+# column that bleeds into the extracted prose: <Feat Name> <Level> fragments spliced
+# mid-sentence (POWER ATTACK's "...multiple Savage Critical 18 Shatter Defenses 6
+# attack penalty..."). They're invisible junk on a feat card. The tell that separates
+# them from a real "Add 5 feet" is that the fragments form a MONOTONIC ALPHABETICAL
+# run — so we strip only the members of a long increasing run, never a lone incidental
+# match. Corpus-measured: a clean feat has ≤2 such candidates and a bled one has 5–30,
+# with a clean gap between, so a run of ≥4 is a trigger that touches no clean feat.
+_BLEED_WORD = r"[A-Z][a-z]+(?:['’\-][A-Za-z]+)?"
+_BLEED_FRAG = re.compile(
+    rf"\b({_BLEED_WORD}(?:[ ](?:of|the|and|to|{_BLEED_WORD})){{0,4}})[ ](\d{{1,2}})\b"
+)
+_BLEED_MIN_RUN = 4
+# Capitalised prose-starters that can glue onto the FRONT of a bled fragment name
+# ("...Make a Strike. The Incredible Ricochet 12" → the name is "Incredible Ricochet").
+_BLEED_LEAD = frozenset(
+    "The You Your This That These Those A An If When While And But Make It Its Each "
+    "Both He She They We Add As Also Then All Any Use".split()
+)
+_BLEED_CONN = frozenset({"of", "the", "and", "to"})  # lowercase connectors inside a name
+
+
+def _bleed_candidates(desc: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) for each ``<Name> <1-20>`` sidebar-fragment candidate, with a
+    leading prose-starter or trailing connector trimmed off the name."""
+    out: list[tuple[int, int, str]] = []
+    for m in _BLEED_FRAG.finditer(desc):
+        if not 1 <= int(m.group(2)) <= 20:
+            continue
+        words = m.group(1).split(" ")
+        start = m.start(1)
+        while len(words) > 1 and words[0] in _BLEED_LEAD:
+            start += len(words[0]) + 1
+            words = words[1:]
+        while len(words) > 1 and words[-1] in _BLEED_CONN:
+            words = words[:-1]
+        if len(words) == 1 and words[0] in _BLEED_LEAD:
+            continue
+        out.append((start, m.end(), " ".join(words)))
+    return out
+
+
+def _longest_alpha_run(names: list[str]) -> list[int]:
+    """Indices of a longest non-decreasing (case-insensitive) subsequence of ``names``
+    — the alphabetical sidebar run threaded through the prose."""
+    keys = [n.lower() for n in names]
+    n = len(keys)
+    if not n:
+        return []
+    best = [1] * n
+    prev = [-1] * n
+    for i in range(n):
+        for j in range(i):
+            if keys[j] <= keys[i] and best[j] + 1 > best[i]:
+                best[i], prev[i] = best[j] + 1, j
+    end = max(range(n), key=lambda i: best[i])
+    run: list[int] = []
+    while end != -1:
+        run.append(end)
+        end = prev[end]
+    return run[::-1]
+
+
+def _strip_feat_bleed(desc: str) -> str:
+    """Remove the alphabetical feats-by-level sidebar fragments bled into a feat's
+    description. Iterates: a sidebar that spans columns restarts alphabetically, so each
+    pass strips one run until none of length ``_BLEED_MIN_RUN`` remains."""
+    for _ in range(8):
+        cands = _bleed_candidates(desc)
+        if len(cands) < _BLEED_MIN_RUN:
+            break
+        run = _longest_alpha_run([c[2] for c in cands])
+        if len(run) < _BLEED_MIN_RUN:
+            break
+        spans = sorted((cands[i][0], cands[i][1]) for i in run)
+        kept, last = [], 0
+        for s, e in spans:
+            kept.append(desc[last:s])
+            last = e
+        kept.append(desc[last:])
+        new = re.sub(r"\s+([.,;:])", r"\1", re.sub(r"\s+", " ", " ".join(kept)).strip())
+        if new == desc:
+            break
+        desc = new
+    return desc
+
+
 def parse_stat_boxes(text: str) -> list[StatBox]:
     """Parse every ``##### **NAME KIND LEVEL**`` box out of extracted markdown. The box
     category is derived from the headings (see :func:`_accepted_kinds`) rather than a
@@ -157,6 +245,8 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
                 fields.append((label, repair_ligatures(value)))
                 seen_labels.add(label)
         description = repair_ligatures(_clean(" ".join(ln for ln in lines if "**" not in ln)))
+        if m.group("kind") == "FEAT":  # strip PF's interleaved feats-by-level sidebar
+            description = _strip_feat_bleed(description)
 
         boxes.append(StatBox(
             name=_clean(m.group("name")),
