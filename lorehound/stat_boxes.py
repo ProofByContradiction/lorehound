@@ -76,7 +76,7 @@ _HEIGHTENED_HEAD = re.compile(r"^\*\*Heightened\b", re.I)
 class StatBox:
     name: str
     kind: str                       # SPELL / FEAT / FOCUS / CANTRIP / RITUAL
-    level: int
+    level: int | None               # None = unknown (a recovered Type-2 feat with no level)
     fields: list[tuple[str, str]] = field(default_factory=list)  # (label, value), in order
     description: str = ""
     page: int | None = None
@@ -205,17 +205,97 @@ def _strip_feat_bleed(desc: str) -> str:
     return desc
 
 
+# ── Type-2 feat headings ──────────────────────────────────────────────────────
+# Some PF feats (most ancestry feats, plus a per-class "additional feats" column) lost
+# their ``##### **NAME FEAT N**`` markup in extraction, leaving the name as a bare bold
+# line ``**NAME**`` directly above a class/ancestry trait line — so `_HEAD_ANY` never
+# matches and the feat is missing as a card entirely. Recover them: the trait line is
+# the anchor (a bold class/ancestry tag right below the name), which keeps a stray bold
+# phrase from being mistaken for a feat. Level survives only where the ancestry pages
+# group feats under a ``#### NTH LEVEL`` header; class feats carry no such header, so
+# their level is left unknown rather than guessed.
+_T2_NAME = re.compile(r"^\*\*([A-Z][A-Z0-9 ,'’\-]{2,44})\*\*$")
+_T2_TAG = re.compile(r"\*\*([A-Z][A-Z’'\-]{1,})\*\*")
+_T2_CLASS_TRAITS = frozenset(
+    "BARBARIAN BARD CHAMPION CLERIC DRUID FIGHTER MONK RANGER ROGUE SORCERER WIZARD "
+    "ALCHEMIST DWARF ELF GNOME GOBLIN HALFLING HUMAN".split()
+)
+# Bold ALL-CAPS lines that are traits/labels, not feat names — never start a box.
+_T2_NOT_A_FEAT = _T2_CLASS_TRAITS | frozenset(
+    "RAGE STANCE PRESS FLOURISH CONCENTRATE OPEN METAMAGIC ATTACK SKILL GENERAL ARCHETYPE "
+    "MORPH PRIMAL OCCULT DIVINE ARCANE TRANSMUTATION POLYMORPH AUDITORY VISUAL EMOTION "
+    "MENTAL DEATH INCAPACITATION MANIPULATE MOVE FORTUNE MISFORTUNE RARE UNCOMMON COMMON".split()
+)
+# NOTE: a recovered Type-2 feat's LEVEL is deliberately left unknown. The pages do carry
+# ``#### NTH LEVEL`` group headers, but two-column extraction scrambles the linear order
+# so the nearest header does NOT reliably govern the feat below it — e.g. "CAVE CLIMBER"
+# follows a "13TH LEVEL" header yet sits amid boxed FEAT 1 / FEAT 5 entries (it's level 5).
+# Rather than emit a wrong level we emit none; the card simply omits the Level row.
+
+
+@dataclass
+class _Heading:
+    start: int          # char offset where the heading begins (for page + bounding)
+    body: int           # char offset where the box body begins (just after the heading)
+    name: str
+    kind: str
+    level: int | None
+
+
+def _type2_feat_headings(text: str, known: set[str]) -> list[_Heading]:
+    """Recover Type-2 feat headings: a bold ``**NAME**`` line whose next non-blank line
+    carries a bold class/ancestry trait. Skips names already parsed as a box or that are
+    themselves traits/labels."""
+    lines = text.split("\n")
+    starts, pos = [], 0
+    for ln in lines:
+        starts.append(pos)
+        pos += len(ln) + 1
+    out: list[_Heading] = []
+    for i, ln in enumerate(lines):
+        m = _T2_NAME.match(ln.strip())
+        if not m:
+            continue
+        name = _clean(m.group(1))
+        up = name.upper()
+        if up in known or up in _T2_NOT_A_FEAT:
+            continue
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j >= len(lines) or not set(_T2_TAG.findall(lines[j])) & _T2_CLASS_TRAITS:
+            continue  # the following line must carry a class/ancestry trait — the anchor
+        known.add(up)  # de-dupe a repeated bold name
+        out.append(_Heading(starts[i], starts[i] + len(ln), name, "FEAT", None))  # level unknown
+    return out
+
+
+def _collect_headings(text: str) -> list[_Heading]:
+    """All box headings in document order: the ``##### **NAME KIND LEVEL**`` boxes plus
+    the recovered Type-2 feat headings, sorted so each box body is bounded by the next
+    heading of either kind."""
+    matches = list(_HEAD_ANY.finditer(text))
+    accepted = _accepted_kinds(matches)
+    heads = [
+        _Heading(m.start(), m.end(), _clean(m.group("name")), m.group("kind"), int(m.group("level")))
+        for m in matches
+        if m.group("kind") in accepted
+    ]
+    heads.extend(_type2_feat_headings(text, {h.name.upper() for h in heads}))
+    heads.sort(key=lambda h: h.start)
+    return heads
+
+
 def parse_stat_boxes(text: str) -> list[StatBox]:
-    """Parse every ``##### **NAME KIND LEVEL**`` box out of extracted markdown. The box
-    category is derived from the headings (see :func:`_accepted_kinds`) rather than a
-    fixed list, so categories the book uses beyond spells/feats are recovered too."""
-    all_heads = list(_HEAD_ANY.finditer(text))
-    accepted = _accepted_kinds(all_heads)
-    heads = [m for m in all_heads if m.group("kind") in accepted]
+    """Parse every ``##### **NAME KIND LEVEL**`` box out of extracted markdown, plus the
+    recovered Type-2 feat headings (see :func:`_type2_feat_headings`). The box category
+    is derived from the headings (see :func:`_accepted_kinds`) rather than a fixed list,
+    so categories the book uses beyond spells/feats are recovered too."""
+    heads = _collect_headings(text)
     boxes: list[StatBox] = []
-    for i, m in enumerate(heads):
-        end = heads[i + 1].start() if i + 1 < len(heads) else m.end() + 1200
-        body = text[m.end():end]
+    for i, h in enumerate(heads):
+        end = heads[i + 1].start if i + 1 < len(heads) else h.body + 1200
+        body = text[h.body:end]
         # drop watermark / page-marker / running-header noise lines
         raw = [ln.strip() for ln in body.split("\n") if ln.strip() and not _NOISE_LINE.search(ln)]
         # Merge a wrapped continuation — a non-label line starting lowercase — into
@@ -245,15 +325,15 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
                 fields.append((label, repair_ligatures(value)))
                 seen_labels.add(label)
         description = repair_ligatures(_clean(" ".join(ln for ln in lines if "**" not in ln)))
-        if m.group("kind") == "FEAT":  # strip PF's interleaved feats-by-level sidebar
+        if h.kind == "FEAT":  # strip PF's interleaved feats-by-level sidebar
             description = _strip_feat_bleed(description)
 
         boxes.append(StatBox(
-            name=_clean(m.group("name")),
-            kind=m.group("kind"),
-            level=int(m.group("level")),
+            name=h.name,
+            kind=h.kind,
+            level=h.level,
             fields=fields,
             description=description,
-            page=_page_at(text, m.start()),
+            page=_page_at(text, h.start),
         ))
     return boxes

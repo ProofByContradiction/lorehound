@@ -736,7 +736,9 @@ def _stat_box_chunks_for_doc(path: str, text: str) -> list[Chunk]:
         # Known kinds get a curated group label; a derived kind (item/hazard/…) labels
         # its own section rather than being filed under "Spells".
         group = _STAT_BOX_GROUP.get(box.kind, box.kind.title())
-        rows = [["Level", str(box.level)]] + [[lbl, val] for lbl, val in box.fields]
+        # A recovered Type-2 feat may have no level; omit the row rather than show "None".
+        level_rows = [["Level", str(box.level)]] if box.level is not None else []
+        rows = level_rows + [[lbl, val] for lbl, val in box.fields]
         flat = " ".join(val for _, val in box.fields)
         chunks.append(Chunk(
             game=game, source=book, category=box.category,

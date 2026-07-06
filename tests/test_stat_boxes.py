@@ -214,3 +214,42 @@ class TestFeatSidebarBleed(unittest.TestCase):
               "Savage Critical 18 It works.\n")
         desc = parse_stat_boxes(md)[0].description
         self.assertIn("Reactive Shield 1", desc)   # NOT stripped — spell, not feat
+
+
+class TestType2FeatRecovery(unittest.TestCase):
+    """Some PF feats lost their ``##### **NAME FEAT N**`` markup, leaving a bare bold
+    ``**NAME**`` line above a class-trait line. These are recovered as level-less feats."""
+
+    MD = ("##### **FIREBALL SPELL 3**\n**Range** 500 feet\nA blast of fire.\n\n"
+          "**GREAT CLEAVE**\n**BARBARIAN** **RAGE**\n**Prerequisites** Cleave\n"
+          "Your fury carries your weapon through multiple foes.\n")
+
+    def setUp(self):
+        self.boxes = {b.name: b for b in parse_stat_boxes(self.MD)}
+
+    def test_type2_feat_recovered_with_unknown_level(self):
+        gc = self.boxes.get("GREAT CLEAVE")
+        self.assertIsNotNone(gc)
+        self.assertEqual(gc.kind, "FEAT")
+        self.assertEqual(gc.category, "feat")
+        self.assertIsNone(gc.level)                       # no reliable level → None
+
+    def test_type2_description_and_fields(self):
+        gc = self.boxes["GREAT CLEAVE"]
+        self.assertIn("Your fury carries your weapon", gc.description)
+        self.assertNotIn("BARBARIAN", gc.description)     # trait line isn't prose
+        self.assertEqual(dict(gc.fields).get("Prerequisites"), "Cleave")
+
+    def test_type2_heading_bounds_the_preceding_box(self):
+        # The recovered heading caps FIREBALL's body, so the feat's prose can't bleed in.
+        self.assertNotIn("fury", self.boxes["FIREBALL"].description)
+
+    def test_bold_trait_line_is_not_a_feat(self):
+        # A bold ALL-CAPS line that is itself a trait must not become a feat box.
+        boxes = parse_stat_boxes("**BARBARIAN**\n**BARBARIAN**\nRaging text here.\n")
+        self.assertEqual(boxes, [])
+
+    def test_bold_name_without_trait_anchor_is_ignored(self):
+        # A bold ALL-CAPS phrase not followed by a class trait is not a feat.
+        boxes = parse_stat_boxes("**A LOUD SHOUT**\nJust some emphasized prose, no trait.\n")
+        self.assertEqual(boxes, [])
