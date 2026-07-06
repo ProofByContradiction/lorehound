@@ -253,3 +253,34 @@ class TestType2FeatRecovery(unittest.TestCase):
         # A bold ALL-CAPS phrase not followed by a class trait is not a feat.
         boxes = parse_stat_boxes("**A LOUD SHOUT**\nJust some emphasized prose, no trait.\n")
         self.assertEqual(boxes, [])
+
+
+class TestMarkupTailTrim(unittest.TestCase):
+    """A bled-in markdown table / heading / sidebar tail (starting with ``##``+ or
+    ``~~``) is cut from a card description — it's never part of real prose."""
+
+    def test_trims_level_header_tail(self):
+        from lorehound.stat_boxes import _trim_markup_tail
+        self.assertEqual(_trim_markup_tail("Real prose ends here. #### 5TH LEVEL"),
+                         "Real prose ends here.")
+
+    def test_trims_struck_table_and_subheader(self):
+        from lorehound.stat_boxes import _trim_markup_tail
+        self.assertEqual(
+            _trim_markup_tail("You become trained. ##### Other Currency #### Large 12"),
+            "You become trained.")
+        self.assertEqual(_trim_markup_tail("Cast it. ~~Untrained~~ ~~10~~ ~~Trained~~"),
+                         "Cast it.")
+
+    def test_clean_prose_untouched(self):
+        from lorehound.stat_boxes import _trim_markup_tail
+        s = "You gain a +1 circumstance bonus to Reflex saves; nothing structural here."
+        self.assertEqual(_trim_markup_tail(s), s)
+
+    def test_end_to_end_table_bleed_removed(self):
+        # The literal case: a currency table bled into WEAPON PROFICIENCY's body.
+        md = ("##### **WEAPON PROFICIENCY FEAT 1**\n"
+              "You become trained in all simple weapons. ##### Other Currency #### "
+              "Price Large 12 Huge 24 Gargantuan 48\n")
+        desc = parse_stat_boxes(md)[0].description
+        self.assertEqual(desc, "You become trained in all simple weapons.")

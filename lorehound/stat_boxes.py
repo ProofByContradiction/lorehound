@@ -98,6 +98,21 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f]", " ", s)).strip()
 
 
+# A markdown heading run (2+ '#') or a strikethrough '~~' never appears in real card
+# prose. When one shows up in a description it's bled-in structure the box body swept in
+# before the next recognized heading — a level-group header ("#### 5TH LEVEL"), a flavor
+# sidebar ("##### While exploring..."), another feat's glyph heading ("##### NAME Ȱ FEAT
+# 4"), or a struck-through table cell ("~~Untrained~~ ~~10~~"). Cut the tail there.
+_MARKUP_TAIL = re.compile(r"\s*(?:#{2,}|~~)")
+
+
+def _trim_markup_tail(desc: str) -> str:
+    """Drop a bled-in markdown table / heading / sidebar tail from a card description
+    (everything from the first ``##``+ heading marker or ``~~`` strikethrough onward)."""
+    m = _MARKUP_TAIL.search(desc)
+    return desc[:m.start()].rstrip() if m else desc
+
+
 def _page_at(text: str, pos: int) -> int | None:
     """The page number of the nearest ``[[page N]]`` marker before ``pos``."""
     last = None
@@ -325,6 +340,7 @@ def parse_stat_boxes(text: str) -> list[StatBox]:
                 fields.append((label, repair_ligatures(value)))
                 seen_labels.add(label)
         description = repair_ligatures(_clean(" ".join(ln for ln in lines if "**" not in ln)))
+        description = _trim_markup_tail(description)  # drop a bled-in table/header/sidebar tail
         if h.kind == "FEAT":  # strip PF's interleaved feats-by-level sidebar
             description = _strip_feat_bleed(description)
 
