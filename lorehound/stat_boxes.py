@@ -230,6 +230,11 @@ def _strip_feat_bleed(desc: str) -> str:
 # group feats under a ``#### NTH LEVEL`` header; class feats carry no such header, so
 # their level is left unknown rather than guessed.
 _T2_NAME = re.compile(r"^\*\*([A-Z][A-Z0-9 ,'’\-]{2,44})\*\*$")
+# Type-2b: the name lost its bold markup too, so it's a bare ALL-CAPS run (2+ words) at
+# the end of a line — optionally after a "<Sidebar Feat> <level>" fragment, whose number
+# gives the anchor (e.g. "No Escape 2 RAGING INTIMIDATION"). Multi-word + the trait-line
+# anchor below keep it from catching stray caps; a single all-caps word is too ambiguous.
+_T2B_NAME = re.compile(r"(?:^|\d[ ])([A-Z][A-Z’'\-]{2,}(?:[ ][A-Z0-9][A-Z0-9’'\-]*){1,4})[ \t]*$")
 _T2_TAG = re.compile(r"\*\*([A-Z][A-Z’'\-]{1,})\*\*")
 _T2_CLASS_TRAITS = frozenset(
     "BARBARIAN BARD CHAMPION CLERIC DRUID FIGHTER MONK RANGER ROGUE SORCERER WIZARD "
@@ -238,7 +243,7 @@ _T2_CLASS_TRAITS = frozenset(
 # Bold ALL-CAPS lines that are traits/labels, not feat names — never start a box.
 _T2_NOT_A_FEAT = _T2_CLASS_TRAITS | frozenset(
     "RAGE STANCE PRESS FLOURISH CONCENTRATE OPEN METAMAGIC ATTACK SKILL GENERAL ARCHETYPE "
-    "MORPH PRIMAL OCCULT DIVINE ARCANE TRANSMUTATION POLYMORPH AUDITORY VISUAL EMOTION "
+    "MORPH PRIMAL OCCULT DIVINE ARCANE TRANSMUTATION POLYMORPH AUDITORY VISUAL EMOTION AURA "
     "MENTAL DEATH INCAPACITATION MANIPULATE MOVE FORTUNE MISFORTUNE RARE UNCOMMON COMMON".split()
 )
 # NOTE: a recovered Type-2 feat's LEVEL is deliberately left unknown. The pages do carry
@@ -258,9 +263,10 @@ class _Heading:
 
 
 def _type2_feat_headings(text: str, known: set[str]) -> list[_Heading]:
-    """Recover Type-2 feat headings: a bold ``**NAME**`` line whose next non-blank line
-    carries a bold class/ancestry trait. Skips names already parsed as a box or that are
-    themselves traits/labels."""
+    """Recover Type-2 feat headings whose ``##### **NAME FEAT N**`` markup was lost: a
+    bold ``**NAME**`` line (Type-2a) or a bare ALL-CAPS name run (Type-2b), whose next
+    non-blank line carries a bold class/ancestry trait — the reliable anchor. Skips names
+    already parsed as a box or that are themselves traits/labels."""
     lines = text.split("\n")
     starts, pos = [], 0
     for ln in lines:
@@ -268,19 +274,25 @@ def _type2_feat_headings(text: str, known: set[str]) -> list[_Heading]:
         pos += len(ln) + 1
     out: list[_Heading] = []
     for i, ln in enumerate(lines):
-        m = _T2_NAME.match(ln.strip())
-        if not m:
-            continue
-        name = _clean(m.group(1))
+        mb = _T2_NAME.match(ln.strip())
+        if mb:
+            name = _clean(mb.group(1))
+        elif not ln.lstrip().startswith("#"):        # Type-2b: bare ALL-CAPS name run
+            mp = _T2B_NAME.search(ln.rstrip())
+            name = _clean(mp.group(1)) if mp else ""
+        else:
+            name = ""
         up = name.upper()
-        if up in known or up in _T2_NOT_A_FEAT:
+        if not up or up in known or up in _T2_NOT_A_FEAT:
             continue
+        if all(w in _T2_NOT_A_FEAT for w in up.split()):
+            continue  # a run made entirely of trait words is a stray trait line, not a name
         j = i + 1
         while j < len(lines) and not lines[j].strip():
             j += 1
         if j >= len(lines) or not set(_T2_TAG.findall(lines[j])) & _T2_CLASS_TRAITS:
             continue  # the following line must carry a class/ancestry trait — the anchor
-        known.add(up)  # de-dupe a repeated bold name
+        known.add(up)  # de-dupe a repeated name
         out.append(_Heading(starts[i], starts[i] + len(ln), name, "FEAT", None))  # level unknown
     return out
 

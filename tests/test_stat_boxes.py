@@ -255,6 +255,38 @@ class TestType2FeatRecovery(unittest.TestCase):
         self.assertEqual(boxes, [])
 
 
+class TestType2bFeatRecovery(unittest.TestCase):
+    """Type-2b: the feat name lost its bold markup too — a bare ALL-CAPS run anchored by
+    the class-trait line below (optionally after a leftover sidebar fragment)."""
+
+    def test_plain_uppercase_name_recovered(self):
+        md = ("SPELL PENETRATION\n**WIZARD**\n"
+              "You've studied ways of overcoming innate magical resistance.\n")
+        b = {x.name: x for x in parse_stat_boxes(md)}.get("SPELL PENETRATION")
+        self.assertIsNotNone(b)
+        self.assertEqual(b.kind, "FEAT")
+        self.assertIsNone(b.level)
+        self.assertIn("overcoming innate magical resistance", b.description)
+
+    def test_name_after_sidebar_fragment(self):
+        # "No Escape 2 RAGING INTIMIDATION" — the sidebar fragment is dropped, leaving
+        # the real name "RAGING INTIMIDATION".
+        md = ("No Escape 2 RAGING INTIMIDATION\n**BARBARIAN**\n"
+              "Your fury fills your foes with fear.\n")
+        names = {b.name for b in parse_stat_boxes(md)}
+        self.assertIn("RAGING INTIMIDATION", names)
+        self.assertNotIn("NO ESCAPE 2 RAGING INTIMIDATION", {n.upper() for n in names})
+
+    def test_plain_name_without_trait_anchor_ignored(self):
+        boxes = parse_stat_boxes("SPELL PENETRATION\nJust prose, no trait line here.\n")
+        self.assertEqual(boxes, [])
+
+    def test_run_of_only_trait_words_is_not_a_feat(self):
+        # A bare run made entirely of trait words is a stray trait line, not a feat name.
+        boxes = parse_stat_boxes("RAGE STANCE\n**BARBARIAN**\nSome raging text.\n")
+        self.assertEqual(boxes, [])
+
+
 class TestMarkupTailTrim(unittest.TestCase):
     """A bled-in markdown table / heading / sidebar tail (starting with ``##``+ or
     ``~~``) is cut from a card description — it's never part of real prose."""
