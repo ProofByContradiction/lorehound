@@ -596,6 +596,20 @@ class TestStatBoxCards(unittest.TestCase):
         self.assertIn("Hidden Pit", [n for n, _ in cards])
         self.assertEqual(len(cards), 3)
 
+    def test_build_stat_cards_keeps_rowless_described_box(self):
+        # Regression: a recovered feat with no level and no fields has empty rows but a
+        # real description (e.g. SPELL PENETRATION). Gating on rows alone dropped it, so
+        # /ability couldn't resolve it. A described box must still become a card.
+        from lorehound.rules import Chunk, _build_stat_cards
+        rowless = Chunk(
+            game="Pathfinder (2e)", source="PC.pdf", category="feat",
+            section="Feats › Spell Penetration", locator="p. 211",
+            text="Spell Penetration Feat You've studied ways of overcoming resistance.",
+            rows=[], description="You've studied ways of overcoming magical resistance.",
+        )
+        cards = _build_stat_cards([rowless]).get(("Pathfinder (2e)", "feat"), [])
+        self.assertIn("Spell Penetration", [n for n, _ in cards])
+
     def test_render_stat_box_card(self):
         from lorehound.tables import render_stat_box
         c = self._chunks()[0]

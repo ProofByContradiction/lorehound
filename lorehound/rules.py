@@ -760,7 +760,10 @@ def _build_stat_cards(chunks: list[Chunk]) -> dict[tuple[str, str], list[tuple[s
 
     out: dict[tuple[str, str], dict[str, tuple[str, Chunk]]] = defaultdict(dict)
     for c in chunks:
-        if c.rows:
+        # A stat box is a card if it has anything to show — a rows grid OR prose.
+        # Recovered feats can have no level and no fields (empty rows) yet a full
+        # description (e.g. SPELL PENETRATION), so gating on rows alone drops them.
+        if c.rows or c.description.strip():
             name = c.section.split("›")[-1].strip()
             out[(c.game, c.category)].setdefault(name.lower(), (name, c))
     return {k: list(v.values()) for k, v in out.items()}
